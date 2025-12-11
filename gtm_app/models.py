@@ -44,12 +44,16 @@ FIELD_OPTIONS = [
 # Platform options
 PLATFORM_OPTIONS = [
     "MSP-01", "MSP-02", "MSP-03", "MSP-04", 
-    "MSP-05", "MSP-06", "MSP-07"
+    "MSP-05", "MSP-06", "MSP-07","MSP-08","MSP-09","MSP-10","MSP-11",
+    "BK-01","BK-03","BK-04","BK-04A","BK-05","BK-06","BK-07","BK-08","BK-09","BK-10",
+    "BK-14","BK-15","BK-16","BK-17","BK-18A","BK-19","BK-20","BK-21","BK-22","BK-23","BK-24","BK-25","BK-26","BT-07",
+    "GTC-01","RC-04","RC-DM","RC-01","RC-02","RC-05","RC-06","RC-08","RC-09","RC-10","RC-11","RC-12","RC-RB1",'RP-01',"RP-02","RP-03",
+    "ThTC-01","ThTC-02","ThTC-03","WHP-KTN","CPP-KNT","CTC-01","CTC-02"
 ]
 
 # Reservoir options
 RESERVOIR_OPTIONS = [
-    "Lower Miocene", "Oligocene C", "Upper Oligocene", 
+    "Lower Miocene","Middle Miocene", "Oligocene C", "Upper Oligocene", 
     "Lower Oligocene", "Basement"
 ]
 
@@ -59,8 +63,9 @@ GTM_TYPE_OPTIONS = [
     "ПВЛГ",  # Perforation 
     "ГРП",   # Hydraulic Fracturing
     "УЭЦН",  # ESP (Electric Submersible Pump)
-    "ЗБС"    # Sidetrack
+    "ЗБС" ,   # Sidetrack
+    "ВНС",
 ]
 
 # Status options
-STATUS_OPTIONS = ["Plan", "In Progress", "Completed", "Cancelled"]
+STATUS_OPTIONS = ["Plan", "Done", "Cancelled"]

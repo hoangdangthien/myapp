@@ -1,4 +1,4 @@
-"""Global styles for the GTM App."""
+"""Global styles for the Production App."""
 import reflex as rx
 
 # Color scheme for oil & gas theme
