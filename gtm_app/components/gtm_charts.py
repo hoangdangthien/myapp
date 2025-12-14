@@ -1,4 +1,4 @@
-"""Chart and visualization components for GTM data."""
+"""Chart and visualization components for Intervention data."""
 import reflex as rx
 from ..states.gtm_state import GTMState
 
@@ -76,18 +76,7 @@ def production_rate_chart() -> rx.Component:
             rx.hstack(
                 rx.heading("Production Rate vs Time", size="4"),
                 rx.spacer(),
-                rx.hstack(
-                    rx.text("Well ID:", size="2"),
-                    rx.select(
-                        GTMState.available_ids,
-                        value=GTMState.selected_id,
-                        on_change=GTMState.set_selected_id,
-                        size="2",
-                        width="150px",
-                    ),
-                    align="center",
-                    spacing="2",
-                ),
+                
                 width="100%",
                 align="center",
             ),
@@ -184,8 +173,9 @@ def production_rate_chart() -> rx.Component:
                 justify="center",
             ),
             width="100%",
-            align="start",
+            align="center",
             spacing="3",
         ),
         padding="1em",
+        width="100%"
     )

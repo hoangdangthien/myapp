@@ -11,7 +11,19 @@ from ..models import (
 from ..states.gtm_state import GTMState
 from .form_fields import form_field, select_field
 
-
+def search_gtm():
+    return rx.flex(
+                    rx.input(
+                        rx.input.slot(rx.icon("search")),
+                        placeholder="Search intervention...",
+                        size="2",
+                        width="100%",
+                        max_width="225px",
+                        variant="surface",
+                        on_change=lambda value:GTMState.filter_intervention(value)
+                        
+                    ),
+                    )
 def add_gtm_button() -> rx.Component:
     """Button and dialog for adding a new GTM/Intervention."""
     return rx.dialog.root(
@@ -175,18 +187,18 @@ def update_gtm_dialog(gtm: Intervention) -> rx.Component:
                     ),
                     rx.text("Decline Parameters - Oil", size="2", weight="bold"),
                     rx.grid(
-                        form_field("Initial Oil Rate", "0", "number", "InitialORate", str(gtm.InitialORate)),
-                        form_field("b (oil)", "0", "number", "bo", str(gtm.bo)),
-                        form_field("Di (oil)", "0", "number", "Dio", str(gtm.Dio)),
+                        form_field("Initial Oil Rate", "", "number", "InitialORate", gtm.InitialORate.to(str)),
+                        form_field("b (oil)", "", "number", "bo", gtm.bo.to(str)),
+                        form_field("Di (oil)", "", "number", "Dio", gtm.Dio.to(str)),
                         columns="3",
                         spacing="2",
                         width="100%",
                     ),
                     rx.text("Decline Parameters - Liquid", size="2", weight="bold"),
                     rx.grid(
-                        form_field("Initial Liq Rate", "0", "number", "InitialLRate", str(gtm.InitialLRate)),
-                        form_field("b (liquid)", "0", "number", "bl", str(gtm.bl)),
-                        form_field("Di (liquid)", "0", "number", "Dil", str(gtm.Dil)),
+                        form_field("Initial Liq Rate", "0", "number", "InitialLRate", gtm.InitialLRate.to(str)),#use to str is working not use str(gtm.InitialLRate)
+                        form_field("b (liquid)", "0", "number", "bl", gtm.bl.to(str)),
+                        form_field("Di (liquid)", "0", "number", "Dil", gtm.Dil.to(str)),
                         columns="3",
                         spacing="2",
                         width="100%",

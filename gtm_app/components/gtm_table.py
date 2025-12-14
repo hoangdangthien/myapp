@@ -54,6 +54,7 @@ def show_intervention(gtm: Intervention) -> rx.Component:
 def gtm_table() -> rx.Component:
     """Create the main data table for interventions."""
     return rx.box(
+        
         rx.table.root(
             rx.table.header(
                 rx.table.row(

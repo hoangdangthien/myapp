@@ -7,7 +7,7 @@ def form_field(
     placeholder: str,
     input_type: str,
     name: str,
-    default_value: str = "",
+    default_value:str="",
     required: bool = True,
 ) -> rx.Component:
     """Create a reusable form field component.
