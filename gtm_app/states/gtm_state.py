@@ -4,6 +4,7 @@ from collections import Counter
 from typing import Optional
 from datetime import datetime, timedelta
 import numpy as np
+from sqlmodel import String, asc, cast, desc, func, or_, select
 
 from ..models import Intervention, InterventionProd
 
@@ -45,7 +46,7 @@ class GTMState(rx.State):
     intervention_date: str = ""
     
     # Search/filter state
-    search_query: str = ""
+    search_value: str = ""
     selected_field: str = ""
     selected_status: str = ""
     
@@ -64,8 +65,19 @@ class GTMState(rx.State):
         """Load all GTMs from database."""
         try:
             with rx.session() as session:
+                query = select(Intervention)
+                if self.search_value:
+                    search_value = f"%{str(self.search_value).lower()}%"
+                    query = query.where(
+                        or_(
+                            *[
+                                getattr(Intervention,field).ilike(search_value)
+                                for field in Intervention.model_fields.keys()
+                            ]
+                        )
+                    )
                 self.GTM = session.exec(
-                    Intervention.select()
+                   query
                 ).all()
             self.transform_data()
             self.available_ids = [gtm.UniqueId for gtm in self.GTM]
@@ -105,7 +117,9 @@ class GTMState(rx.State):
         except Exception as e:
             print(f"Error loading production data: {e}")
             self.intervention_prod = []
-
+    def filter_intervention(self,search_value):
+        self.search_value = search_value
+        self.load_gtms()
     def update_chart_data(self):
         """Update chart data combining actual and forecast."""
         chart_points = []
@@ -311,7 +325,7 @@ class GTMState(rx.State):
                 session.refresh(new_gtm)
             
             # Close dialog and reload data
-            self.add_dialog_open = False
+            #self.add_dialog_open = False
             self.load_gtms()
             return rx.toast.success("GTM added successfully!")
             
@@ -324,15 +338,12 @@ class GTMState(rx.State):
         self.current_gtm = gtm
 
     def update_gtm(self, form_data: dict):
-        """Update existing GTM in database."""
+        """Update existing GTM in database with partial update support.
+        
+        Only updates fields that have non-empty values in form_data.
+        Empty strings or None values are ignored, keeping existing values.
+        """
         try:
-            form_data["InitialORate"] = float(form_data.get("InitialORate", 0))
-            form_data["bo"] = float(form_data.get("bo", 0))
-            form_data["Dio"] = float(form_data.get("Dio", 0))
-            form_data["InitialLRate"] = float(form_data.get("InitialLRate", 0))
-            form_data["bl"] = float(form_data.get("bl", 0))
-            form_data["Dil"] = float(form_data.get("Dil", 0))
-            
             with rx.session() as session:
                 gtm_to_update = session.exec(
                     Intervention.select().where(
@@ -341,18 +352,31 @@ class GTMState(rx.State):
                 ).first()
                 
                 if gtm_to_update:
-                    gtm_to_update.Field = form_data.get("Field", gtm_to_update.Field)
-                    gtm_to_update.Platform = form_data.get("Platform", gtm_to_update.Platform)
-                    gtm_to_update.Reservoir = form_data.get("Reservoir", gtm_to_update.Reservoir)
-                    gtm_to_update.TypeGTM = form_data.get("TypeGTM", gtm_to_update.TypeGTM)
-                    gtm_to_update.PlanningDate = form_data.get("PlanningDate", gtm_to_update.PlanningDate)
-                    gtm_to_update.Status = form_data.get("Status", gtm_to_update.Status)
-                    gtm_to_update.InitialORate = form_data["InitialORate"]
-                    gtm_to_update.bo = form_data["bo"]
-                    gtm_to_update.Dio = form_data["Dio"]
-                    gtm_to_update.InitialLRate = form_data["InitialLRate"]
-                    gtm_to_update.bl = form_data["bl"]
-                    gtm_to_update.Dil = form_data["Dil"]
+                    # Update string fields only if non-empty value provided
+                    string_fields = ["Field", "Platform", "Reservoir", "TypeGTM", "PlanningDate", "Status"]
+                    for field in string_fields:
+                        value = form_data.get(field)
+                        if value and str(value).strip():  # Check for non-empty string
+                            setattr(gtm_to_update, field, value)
+                    
+                    # Update numeric fields only if valid value provided
+                    numeric_fields = [
+                        ("InitialORate", "InitialORate"),
+                        ("bo", "bo"),
+                        ("Dio", "Dio"),
+                        ("InitialLRate", "InitialLRate"),
+                        ("bl", "bl"),
+                        ("Dil", "Dil"),
+                    ]
+                    for form_key, model_field in numeric_fields:
+                        value = form_data.get(form_key)
+                        if value is not None and str(value).strip():
+                            try:
+                                numeric_value = float(value)
+                                setattr(gtm_to_update, model_field, numeric_value)
+                            except (ValueError, TypeError):
+                                # Keep existing value if conversion fails
+                                pass
                     
                     session.add(gtm_to_update)
                     session.commit()
@@ -406,7 +430,7 @@ class GTMState(rx.State):
     @rx.var
     def completed_interventions(self) -> int:
         """Get count of completed interventions."""
-        return sum(1 for gtm in self.GTM if gtm.Status == "Completed")
+        return sum(1 for gtm in self.GTM if gtm.Status == "Done")
     
     @rx.var
     def production_table_data(self) -> list[dict]:
