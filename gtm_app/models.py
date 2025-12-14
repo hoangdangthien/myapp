@@ -34,6 +34,31 @@ class InterventionProd(rx.Model, table=True):
     LiqProd: float      # Cumulative liquid production (bbl)
     WC: float           # Water cut (%)
 
+class HistoryProd(rx.Model,table=True):
+    __tablename__="HistoryProd"
+    UniqueId: str = sqlmodel.Field(primary_key=True)
+    Date : str = sqlmodel.Field(primary_key=True)
+    Dayon : float
+    Method: str
+    Qoil:float
+    Qgas:float
+    Qwater:float
+    GOR:float
+    ChokeSize:float
+    Press_WH:float
+    Oilrate:float
+    Liqrate:float
+    Gasrate:float
+    Note:str
+class Master(rx.Model,table=True):
+    __tablename__="Master"
+    UniqueId:str=sqlmodel.Field(primary_key=True)
+    Wellname:str
+    X_top:float
+    Y_top:float
+    X_bot:float
+    Y_bot:float
+    
 
 # Field options for dropdown selections
 FIELD_OPTIONS = [
@@ -59,12 +84,18 @@ RESERVOIR_OPTIONS = [
 
 # GTM Type options (Russian abbreviations for well interventions)
 GTM_TYPE_OPTIONS = [
+    "ВНС",
     "ГРП",   # Hydraulic Fracturing
     "ПВЛГ",  # Perforation 
-    "ГРП",   # Hydraulic Fracturing
     "УЭЦН",  # ESP (Electric Submersible Pump)
     "ЗБС" ,   # Sidetrack
-    "ВНС",
+    "РИР",
+    "ОПЗ",
+    "ПВР (через НКТ)",
+    "TPO",
+    "Смена ВСО",
+    "Перевод в добычу из ППД",
+    "Нормализация забоя",
 ]
 
 # Status options
