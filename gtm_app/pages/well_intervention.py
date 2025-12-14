@@ -2,7 +2,7 @@
 import reflex as rx
 from ..templates.template import template
 from ..states.gtm_state import GTMState
-from ..components.gtm_dialogs import add_gtm_button, load_excel_button
+from ..components.gtm_dialogs import add_gtm_button, load_excel_button,search_gtm
 from ..components.gtm_table import gtm_table, production_record_table, forecast_result_table
 from ..components.gtm_charts import production_rate_chart
 
@@ -16,6 +16,7 @@ def intervention_table_section() -> rx.Component:
                 rx.heading("Intervention ID", size="4"),
                 rx.spacer(),
                 rx.hstack(
+                    search_gtm(),
                     add_gtm_button(),
                     load_excel_button(),
                     spacing="2",
@@ -37,6 +38,17 @@ def intervention_table_section() -> rx.Component:
 def forecast_controls() -> rx.Component:
     """Forecast control panel with date input and button."""
     return rx.hstack(
+        rx.vstack(
+            rx.text("Intervention ID:", size="1",weight="bold"),
+            rx.select(
+                GTMState.available_ids,
+                value=GTMState.selected_id,
+                on_change=GTMState.set_selected_id,
+                size="2",
+                width="150px",
+            ),
+            spacing="1",
+        ),
         rx.vstack(
             rx.text("Forecast End Date", size="1", weight="bold"),
             rx.input(
@@ -119,6 +131,7 @@ def forecast_section() -> rx.Component:
             rx.hstack(
                 rx.heading("Forecast & Production", size="4"),
                 rx.spacer(),
+                
                 forecast_controls(),
                 width="100%",
                 align="center",
@@ -201,13 +214,12 @@ def well_intervention_page() -> rx.Component:
             intervention_table_section(),
             # Right: Forecast Section
             forecast_section(),
+            production_rate_chart(),
             columns="2",
+            rows="2",
             spacing="4",
             width="100%",
         ),
-        
-        # Bottom: Production Rate Chart
-        production_rate_chart(),
         
         align="start",
         spacing="4",
