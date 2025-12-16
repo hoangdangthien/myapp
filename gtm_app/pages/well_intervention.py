@@ -2,7 +2,7 @@
 import reflex as rx
 from ..templates.template import template
 from ..states.gtm_state import GTMState
-from ..components.gtm_dialogs import add_gtm_button, load_excel_button,search_gtm
+from ..components.gtm_dialogs import add_gtm_button, load_excel_button, search_gtm
 from ..components.gtm_table import gtm_table, production_record_table, forecast_result_table
 from ..components.gtm_charts import production_rate_chart
 
@@ -36,10 +36,10 @@ def intervention_table_section() -> rx.Component:
 
 
 def forecast_controls() -> rx.Component:
-    """Forecast control panel with date input and button."""
+    """Forecast control panel with date input, version selector, and button."""
     return rx.hstack(
         rx.vstack(
-            rx.text("Intervention ID:", size="1",weight="bold"),
+            rx.text("Intervention ID:", size="1", weight="bold"),
             rx.select(
                 GTMState.available_ids,
                 value=GTMState.selected_id,
@@ -70,53 +70,101 @@ def forecast_controls() -> rx.Component:
     )
 
 
+def forecast_version_selector() -> rx.Component:
+    """Selector for viewing different forecast versions."""
+    return rx.cond(
+        GTMState.available_forecast_versions.length() > 0,
+        rx.hstack(
+            rx.text("Forecast Version:", size="1", weight="bold"),
+            rx.select(
+                GTMState.forecast_version_options,
+                value=f"v{GTMState.current_forecast_version}",
+                on_change=lambda v: GTMState.set_forecast_version_from_str,  # Remove 'v' prefix
+                size="1",
+                width="80px",
+            ),
+            rx.badge(
+                f"{GTMState.available_forecast_versions.length()}/3 versions",
+                color_scheme="gray",
+                size="1",
+            ),
+            spacing="2",
+            align="center",
+        ),
+        rx.text("No forecast versions available", size="1", color=rx.color("gray", 9)),
+    )
+
+
 def current_intervention_info() -> rx.Component:
     """Display current selected intervention info."""
     return rx.cond(
         GTMState.current_gtm,
-        rx.hstack(
-            rx.vstack(
-                rx.text("Selected:", size="1", color=rx.color("gray", 10)),
-                rx.text(GTMState.selected_id, weight="bold", size="2"),
-                spacing="0",
-            ),
-            rx.divider(orientation="vertical", size="2"),
-            rx.vstack(
-                rx.text("Type:", size="1", color=rx.color("gray", 10)),
-                rx.badge(
-                    rx.cond(
-                        GTMState.current_gtm,
-                        GTMState.current_gtm.TypeGTM,
-                        "-"
-                    ),
-                    color_scheme="blue",
-                    size="1"
+        rx.vstack(
+            rx.hstack(
+                rx.vstack(
+                    rx.text("Selected:", size="1", color=rx.color("gray", 10)),
+                    rx.text(GTMState.selected_id, weight="bold", size="2"),
+                    spacing="0",
                 ),
-                spacing="0",
-            ),
-            rx.divider(orientation="vertical", size="2"),
-            rx.vstack(
-                rx.text("Date:", size="1", color=rx.color("gray", 10)),
-                rx.text(GTMState.intervention_date, size="2"),
-                spacing="0",
-            ),
-            rx.divider(orientation="vertical", size="2"),
-            rx.vstack(
-                rx.text("qi_o / b_o / Di_o:", size="1", color=rx.color("gray", 10)),
-                rx.text(
-                    rx.cond(
-                        GTMState.current_gtm,
-                        f"{GTMState.current_gtm.InitialORate:.0f} / {GTMState.current_gtm.bo:.2f} / {GTMState.current_gtm.Dio:.3f}",
-                        "-"
+                rx.divider(orientation="vertical", size="2"),
+                rx.vstack(
+                    rx.text("Type:", size="1", color=rx.color("gray", 10)),
+                    rx.badge(
+                        rx.cond(
+                            GTMState.current_gtm,
+                            GTMState.current_gtm.TypeGTM,
+                            "-"
+                        ),
+                        color_scheme="blue",
+                        size="1"
                     ),
-                    size="2"
+                    spacing="0",
                 ),
-                spacing="0",
+                rx.divider(orientation="vertical", size="2"),
+                rx.vstack(
+                    rx.text("Date:", size="1", color=rx.color("gray", 10)),
+                    rx.text(GTMState.intervention_date, size="2"),
+                    spacing="0",
+                ),
+                rx.divider(orientation="vertical", size="2"),
+                rx.vstack(
+                    rx.text("qi_o / b_o / Di_o:", size="1", color=rx.color("gray", 10)),
+                    rx.text(
+                        rx.cond(
+                            GTMState.current_gtm,
+                            f"{GTMState.current_gtm.InitialORate:.0f} / {GTMState.current_gtm.bo:.2f} / {GTMState.current_gtm.Dio:.3f}",
+                            "-"
+                        ),
+                        size="2"
+                    ),
+                    spacing="0",
+                ),
+                spacing="4",
+                padding="0.5em",
+                background=rx.color("gray", 2),
+                border_radius="6px",
+                width="100%",
             ),
-            spacing="4",
-            padding="0.5em",
-            background=rx.color("gray", 2),
-            border_radius="6px",
+            # Forecast version selector row
+            rx.hstack(
+                forecast_version_selector(),
+                rx.spacer(),
+                rx.cond(
+                    GTMState.current_forecast_version > 0,
+                    rx.button(
+                        rx.icon("trash-2", size=12),
+                        rx.text("Delete Version", size="1"),
+                        variant="ghost",
+                        color_scheme="red",
+                        size="1",
+                        on_click=lambda: GTMState.delete_current_forecast_version,
+                    ),
+                    rx.fragment(),
+                ),
+                width="100%",
+                align="center",
+            ),
+            spacing="2",
             width="100%",
         ),
         rx.text("Select an intervention", color=rx.color("gray", 10), size="2"),
@@ -131,14 +179,13 @@ def forecast_section() -> rx.Component:
             rx.hstack(
                 rx.heading("Forecast & Production", size="4"),
                 rx.spacer(),
-                
                 forecast_controls(),
                 width="100%",
                 align="center",
             ),
             rx.divider(),
             
-            # Current intervention info
+            # Current intervention info with version selector
             current_intervention_info(),
             
             # Two tables side by side
@@ -152,7 +199,15 @@ def forecast_section() -> rx.Component:
                 ),
                 # Forecast Results
                 rx.vstack(
-                    rx.text("Forecast Results", size="2", weight="bold"),
+                    rx.hstack(
+                        rx.text("Forecast Results", size="2", weight="bold"),
+                        rx.cond(
+                            GTMState.current_forecast_version > 0,
+                            rx.badge(f"v{GTMState.current_forecast_version}", color_scheme="blue", size="1"),
+                            rx.fragment(),
+                        ),
+                        spacing="2",
+                    ),
                     forecast_result_table(),
                     width="100%",
                     spacing="2",
@@ -182,6 +237,11 @@ def well_intervention_page() -> rx.Component:
     Layout:
     - Top: Two-column grid (Left: Intervention Table | Right: Forecast/Production)
     - Bottom: Rate vs Time scatter plot with intervention line
+    
+    Features:
+    - Forecast versioning: Saves up to 3 forecast versions per intervention (FIFO)
+    - Version selector: Switch between different forecast versions
+    - Auto-save: Forecasts automatically saved to InterventionProd table
     """
     return rx.vstack(
         # Page Header
