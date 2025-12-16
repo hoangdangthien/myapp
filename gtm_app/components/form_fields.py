@@ -7,8 +7,9 @@ def form_field(
     placeholder: str,
     input_type: str,
     name: str,
-    default_value:str="",
+    default_value: str = "",
     required: bool = True,
+    step: str = "any",  # Add step parameter for number inputs
 ) -> rx.Component:
     """Create a reusable form field component.
     
@@ -19,20 +20,27 @@ def form_field(
         name: Form field name for submission
         default_value: Default value for the input
         required: Whether the field is required
+        step: Step value for number inputs (use "any" for decimals)
     
     Returns:
         A Reflex component containing label and input
     """
+    input_props = {
+        "placeholder": placeholder,
+        "type": input_type,
+        "name": name,
+        "default_value": default_value,
+        "required": required,
+        "width": "100%",
+    }
+    
+    # Add step attribute for number inputs to allow decimals
+    if input_type == "number":
+        input_props["step"] = step
+    
     return rx.flex(
         rx.text(label, size="2", weight="bold"),
-        rx.input(
-            placeholder=placeholder,
-            type=input_type,
-            name=name,
-            default_value=default_value,
-            required=required,
-            width="100%",
-        ),
+        rx.input(**input_props),
         direction="column",
         spacing="1",
         width="100%",

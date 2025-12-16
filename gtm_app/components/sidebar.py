@@ -9,14 +9,7 @@ def sidebar_item(
     href: str,
     is_active: bool = False
 ) -> rx.Component:
-    """Create a sidebar navigation item.
-    
-    Args:
-        text: Display text for the menu item
-        icon: Lucide icon name
-        href: Navigation route
-        is_active: Whether this item is currently active
-    """
+    """Create a sidebar navigation item."""
     return rx.link(
         rx.hstack(
             rx.icon(icon, size=20),
@@ -70,6 +63,7 @@ def sidebar() -> rx.Component:
                     "wrench",
                     "/well-intervention",
                 ),
+                
                 width="100%",
                 spacing="1",
                 padding="0.5em",

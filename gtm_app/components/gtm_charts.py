@@ -70,54 +70,92 @@ def gtm_type_chart() -> rx.Component:
 
 
 def production_rate_chart() -> rx.Component:
-    """Line chart showing rate vs time with intervention line."""
+    """Line chart showing rate vs time with intervention line and phase checkboxes."""
     return rx.card(
         rx.vstack(
             rx.hstack(
                 rx.heading("Production Rate vs Time", size="4"),
                 rx.spacer(),
-                
+                # Phase selection checkboxes
+                rx.hstack(
+                    rx.text("Show:", size="2", weight="bold"),
+                    rx.checkbox(
+                        "Oil",
+                        checked=GTMState.show_oil,
+                        on_change=GTMState.toggle_oil,
+                        color_scheme="green",
+                    ),
+                    rx.checkbox(
+                        "Liquid",
+                        checked=GTMState.show_liquid,
+                        on_change=GTMState.toggle_liquid,
+                        color_scheme="blue",
+                    ),
+                    spacing="3",
+                    align="center",
+                ),
                 width="100%",
                 align="center",
             ),
+            # Chart showing all phases (conditionally rendered based on checkboxes)
             rx.recharts.composed_chart(
-                # Actual oil rate - line with dots (scatter-like)
-                rx.recharts.line(
-                    data_key="oilRate",
-                    name="Oil Rate (Actual)",
-                    stroke=rx.color("green", 9),
-                    dot=True,
-                    type_="monotone",
-                    connect_nulls=True,
+                # Actual oil rate - conditionally shown
+                rx.cond(
+                    GTMState.show_oil,
+                    rx.recharts.line(
+                        data_key="oilRate",
+                        name="Oil Rate (Actual)",
+                        stroke=rx.color("green", 9),
+                        dot=True,
+                        type_="monotone",
+                        connect_nulls=True,
+                        stroke_width=2,
+                    ),
+                    rx.fragment(),
                 ),
-                # Actual liquid rate - line with dots
-                rx.recharts.line(
-                    data_key="liqRate",
-                    name="Liq Rate (Actual)",
-                    stroke=rx.color("blue", 9),
-                    dot=True,
-                    type_="monotone",
-                    connect_nulls=True,
+                # Actual liquid rate - conditionally shown
+                rx.cond(
+                    GTMState.show_liquid,
+                    rx.recharts.line(
+                        data_key="liqRate",
+                        name="Liq Rate (Actual)",
+                        stroke=rx.color("blue", 9),
+                        dot=True,
+                        type_="monotone",
+                        connect_nulls=True,
+                        stroke_width=2,
+                    ),
+                    rx.fragment(),
                 ),
-                # Forecast oil rate - dashed line
-                rx.recharts.line(
-                    data_key="oilRateForecast",
-                    name="Oil Rate (Forecast)",
-                    stroke=rx.color("green", 6),
-                    stroke_dasharray="5 5",
-                    dot=False,
-                    type_="monotone",
-                    connect_nulls=True,
+                # Forecast oil rate - conditionally shown
+                rx.cond(
+                    GTMState.show_oil,
+                    rx.recharts.line(
+                        data_key="oilRateForecast",
+                        name="Oil Rate (Forecast)",
+                        stroke=rx.color("green", 10),
+                        stroke_dasharray="5 5",
+                        dot=False,
+                        type_="monotone",
+                        connect_nulls=True,
+                        stroke_width=2,
+                    ),
+                    rx.fragment(),
                 ),
-                # Forecast liquid rate - dashed line
-                rx.recharts.line(
-                    data_key="liqRateForecast",
-                    name="Liq Rate (Forecast)",
-                    stroke=rx.color("blue", 6),
-                    stroke_dasharray="5 5",
-                    dot=False,
-                    type_="monotone",
-                    connect_nulls=True,
+                # Forecast liquid rate - conditionally shown
+                rx.cond(
+                    GTMState.show_liquid,
+                    rx.recharts.line(
+                        data_key="liqRateForecast",
+                        name="Liq Rate (Forecast)",
+                        stroke=rx.color("blue", 10),
+                        stroke_dasharray="5 5",
+                        dot=False,
+                        type_="monotone",
+                        connect_nulls=True,
+                        stroke_width=2,
+                    ),
+                    rx.fragment(),
                 ),
                 # Intervention vertical line
                 rx.recharts.reference_line(
@@ -125,22 +163,24 @@ def production_rate_chart() -> rx.Component:
                     stroke=rx.color("red", 9),
                     stroke_dasharray="3 3",
                     label="GTM",
+                    stroke_width=2,
                 ),
-                rx.recharts.x_axis(data_key="date", angle=-45, text_anchor="end"),
-                rx.recharts.y_axis(),
+                rx.recharts.x_axis(data_key="date", angle=-45, text_anchor="end", height=80),
+                rx.recharts.y_axis(label={"value": "Rate (t/day)", "angle": -90, "position": "Center"}),
                 rx.recharts.cartesian_grid(stroke_dasharray="3 3"),
                 rx.recharts.graphing_tooltip(),
                 rx.recharts.legend(),
                 data=GTMState.chart_data,
                 width="100%",
                 height=350,
-                margin={"bottom": 60, "left": 20, "right": 20, "top": 10},
+                margin={"bottom": 10, "left": 10, "right": 20, "top": 10},
             ),
+            # Legend
             rx.hstack(
                 rx.badge(
                     rx.hstack(
                         rx.box(width="12px", height="3px", bg=rx.color("green", 9)),
-                        rx.text("Oil Rate", size="1"),
+                        rx.text("Oil Rate (Actual)", size="1"),
                         spacing="1",
                     ),
                     variant="soft",
@@ -148,7 +188,20 @@ def production_rate_chart() -> rx.Component:
                 rx.badge(
                     rx.hstack(
                         rx.box(width="12px", height="3px", bg=rx.color("blue", 9)),
-                        rx.text("Liquid Rate", size="1"),
+                        rx.text("Liquid Rate (Actual)", size="1"),
+                        spacing="1",
+                    ),
+                    variant="soft",
+                ),
+                rx.badge(
+                    rx.hstack(
+                        rx.box(
+                            width="12px", 
+                            height="3px", 
+                            bg=rx.color("gray", 6),
+                            style={"border_top": "2px dashed"}
+                        ),
+                        rx.text("Forecast", size="1"),
                         spacing="1",
                     ),
                     variant="soft",
@@ -157,14 +210,6 @@ def production_rate_chart() -> rx.Component:
                     rx.hstack(
                         rx.box(width="12px", height="3px", bg=rx.color("red", 9)),
                         rx.text("Intervention Date", size="1"),
-                        spacing="1",
-                    ),
-                    variant="soft",
-                ),
-                rx.badge(
-                    rx.hstack(
-                        rx.box(width="12px", height="3px", bg=rx.color("gray", 6), style={"border_top": "2px dashed"}),
-                        rx.text("Forecast", size="1"),
                         spacing="1",
                     ),
                     variant="soft",
