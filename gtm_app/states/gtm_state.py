@@ -45,6 +45,10 @@ class GTMState(rx.State):
     # Intervention date for vertical line
     intervention_date: str = ""
     
+    # Phase selection for chart (checkboxes for multi-select)
+    show_oil: bool = True
+    show_liquid: bool = True
+    
     # Search/filter state
     search_value: str = ""
     selected_field: str = ""
@@ -60,6 +64,14 @@ class GTMState(rx.State):
     def set_add_dialog_open(self, is_open: bool):
         """Control add dialog open state."""
         self.add_dialog_open = is_open
+    
+    def toggle_oil(self, checked: bool):
+        """Toggle oil phase visibility."""
+        self.show_oil = checked
+    
+    def toggle_liquid(self, checked: bool):
+        """Toggle liquid phase visibility."""
+        self.show_liquid = checked
 
     def load_gtms(self):
         """Load all GTMs from database."""
@@ -117,9 +129,11 @@ class GTMState(rx.State):
         except Exception as e:
             print(f"Error loading production data: {e}")
             self.intervention_prod = []
+    
     def filter_intervention(self,search_value):
         self.search_value = search_value
         self.load_gtms()
+    
     def update_chart_data(self):
         """Update chart data combining actual and forecast."""
         chart_points = []
@@ -155,23 +169,15 @@ class GTMState(rx.State):
         self.forecast_end_date = date
 
     def run_forecast(self):
-        """Run Arps decline curve forecast for selected intervention."""
+        """Run Arps decline curve forecast for selected intervention.
+        
+        For 'Plan' status: Uses PlanningDate as start date with parameters from InterventionID
+        For 'Done' status: Uses last production data as start point
+        """
         if not self.current_gtm or not self.forecast_end_date:
             return rx.toast.error("Please select an intervention and set forecast end date")
         
-        if not self.intervention_prod:
-            return rx.toast.error("No production data available for forecasting")
-        
         try:
-            # Get last production date
-            sorted_prod = sorted(self.intervention_prod, key=lambda x: x.Date)
-            last_prod = sorted_prod[-1]
-            last_date = datetime.strptime(last_prod.Date, "%Y-%m-%d")
-            end_date = datetime.strptime(self.forecast_end_date, "%Y-%m-%d")
-            
-            if end_date <= last_date:
-                return rx.toast.error("Forecast end date must be after last production date")
-            
             # Arps decline parameters from current GTM
             qi_oil = self.current_gtm.InitialORate
             b_oil = self.current_gtm.bo
@@ -181,13 +187,33 @@ class GTMState(rx.State):
             b_liq = self.current_gtm.bl
             di_liq = self.current_gtm.Dil
             
-            # Use last actual rates as starting point if available
-            qi_oil = last_prod.OilRate if last_prod.OilRate > 0 else qi_oil
-            qi_liq = last_prod.LiqRate if last_prod.LiqRate > 0 else qi_liq
+            end_date = datetime.strptime(self.forecast_end_date, "%Y-%m-%d")
+            
+            # Determine start date and initial rates based on status
+            if self.current_gtm.Status == "Plan":
+                # For planned interventions: start from PlanningDate with design parameters
+                start_date = datetime.strptime(self.current_gtm.PlanningDate, "%Y-%m-%d")
+                # Use design parameters as-is
+                
+            else:
+                # For completed interventions: use last production data if available
+                if not self.intervention_prod:
+                    return rx.toast.error("No production data available for forecasting")
+                
+                sorted_prod = sorted(self.intervention_prod, key=lambda x: x.Date)
+                last_prod = sorted_prod[-1]
+                start_date = datetime.strptime(last_prod.Date, "%Y-%m-%d")
+                
+                # Use last actual rates as starting point
+                qi_oil = last_prod.OilRate if last_prod.OilRate > 0 else qi_oil
+                qi_liq = last_prod.LiqRate if last_prod.LiqRate > 0 else qi_liq
+            
+            if end_date <= start_date:
+                return rx.toast.error(f"Forecast end date must be after {start_date.strftime('%Y-%m-%d')}")
             
             # Generate forecast
             forecast_points = []
-            current_date = last_date + timedelta(days=30)  # Monthly forecast
+            current_date = start_date + timedelta(days=30)  # Monthly forecast
             t = 1  # Time in months
             
             while current_date <= end_date:
@@ -213,7 +239,9 @@ class GTMState(rx.State):
             
             self.forecast_data = forecast_points
             self.update_chart_data()
-            return rx.toast.success(f"Forecast generated with {len(forecast_points)} points")
+            
+            status_msg = "planned intervention" if self.current_gtm.Status == "Plan" else "completed intervention"
+            return rx.toast.success(f"Forecast generated for {status_msg} with {len(forecast_points)} points")
             
         except Exception as e:
             print(f"Forecast error: {e}")
@@ -340,8 +368,8 @@ class GTMState(rx.State):
     def update_gtm(self, form_data: dict):
         """Update existing GTM in database with partial update support.
         
-        Only updates fields that have non-empty values in form_data.
-        Empty strings or None values are ignored, keeping existing values.
+        Only updates fields that have values in form_data.
+        Distinguishes between empty fields (keep existing) and new values (update).
         """
         try:
             with rx.session() as session:
@@ -359,7 +387,7 @@ class GTMState(rx.State):
                         if value and str(value).strip():  # Check for non-empty string
                             setattr(gtm_to_update, field, value)
                     
-                    # Update numeric fields only if valid value provided
+                    # Update numeric fields - accept any valid number including 0
                     numeric_fields = [
                         ("InitialORate", "InitialORate"),
                         ("bo", "bo"),
@@ -370,7 +398,8 @@ class GTMState(rx.State):
                     ]
                     for form_key, model_field in numeric_fields:
                         value = form_data.get(form_key)
-                        if value is not None and str(value).strip():
+                        # Only skip if value is None or empty string
+                        if value is not None and value != "":
                             try:
                                 numeric_value = float(value)
                                 setattr(gtm_to_update, model_field, numeric_value)
