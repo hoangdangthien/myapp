@@ -4,15 +4,16 @@ from collections import Counter
 from typing import Optional
 from datetime import datetime, timedelta
 import numpy as np
-from sqlmodel import String, asc, cast, desc, func, or_, select
+from sqlmodel import String, asc, cast, desc, func, or_, select, delete
 
-from ..models import Intervention, InterventionProd
+from ..models import Intervention, InterventionProd, MAX_FORECAST_VERSIONS
 
 
 class GTMState(rx.State):
     """State for managing Well Intervention (GTM) data.
     
-    Handles CRUD operations, Excel import, forecasting, and data transformations.
+    Handles CRUD operations, Excel import, forecasting with version control,
+    and data transformations.
     """
     
     # List of all interventions
@@ -44,6 +45,12 @@ class GTMState(rx.State):
     
     # Intervention date for vertical line
     intervention_date: str = ""
+    
+    # Current forecast version being displayed
+    current_forecast_version: int = 0
+    
+    # Available forecast versions for current intervention
+    available_forecast_versions: list[int] = []
     
     # Phase selection for chart (checkboxes for multi-select)
     show_oil: bool = True
@@ -83,14 +90,12 @@ class GTMState(rx.State):
                     query = query.where(
                         or_(
                             *[
-                                getattr(Intervention,field).ilike(search_value)
+                                getattr(Intervention, field).ilike(search_value)
                                 for field in Intervention.model_fields.keys()
                             ]
                         )
                     )
-                self.GTM = session.exec(
-                   query
-                ).all()
+                self.GTM = session.exec(query).all()
             self.transform_data()
             self.available_ids = [gtm.UniqueId for gtm in self.GTM]
             if self.available_ids and not self.selected_id:
@@ -109,11 +114,22 @@ class GTMState(rx.State):
             
         try:
             with rx.session() as session:
+                # Load only actual production data (Version = 0)
                 self.intervention_prod = session.exec(
                     InterventionProd.select().where(
-                        InterventionProd.UniqueId == self.selected_id
+                        InterventionProd.UniqueId == self.selected_id,
+                        InterventionProd.Version == 0  # Actual data only
                     )
                 ).all()
+                
+                # Load available forecast versions
+                forecast_versions = session.exec(
+                    select(InterventionProd.Version).where(
+                        InterventionProd.UniqueId == self.selected_id,
+                        InterventionProd.Version > 0
+                    ).distinct()
+                ).all()
+                self.available_forecast_versions = sorted(forecast_versions)
             
             # Get intervention date
             selected_gtm = next(
@@ -123,6 +139,13 @@ class GTMState(rx.State):
                 self.intervention_date = selected_gtm.PlanningDate
                 self.current_gtm = selected_gtm
             
+            # Load latest forecast version if available
+            if self.available_forecast_versions:
+                self.current_forecast_version = max(self.available_forecast_versions)
+                self.load_forecast_from_db()
+            else:
+                self.forecast_data = []
+            
             # Transform to chart data
             self.update_chart_data()
             
@@ -130,7 +153,40 @@ class GTMState(rx.State):
             print(f"Error loading production data: {e}")
             self.intervention_prod = []
     
-    def filter_intervention(self,search_value):
+    def load_forecast_from_db(self):
+        """Load forecast data for current version from database."""
+        if not self.selected_id or self.current_forecast_version == 0:
+            self.forecast_data = []
+            return
+            
+        try:
+            with rx.session() as session:
+                forecast_records = session.exec(
+                    InterventionProd.select().where(
+                        InterventionProd.UniqueId == self.selected_id,
+                        InterventionProd.Version == self.current_forecast_version
+                    ).order_by(InterventionProd.Date)
+                ).all()
+                
+                self.forecast_data = [
+                    {
+                        "date": rec.Date.strftime("%Y-%m-%d") if isinstance(rec.Date, datetime) else str(rec.Date),
+                        "oilRate": rec.OilRate,
+                        "liqRate": rec.LiqRate
+                    }
+                    for rec in forecast_records
+                ]
+        except Exception as e:
+            print(f"Error loading forecast from DB: {e}")
+            self.forecast_data = []
+    
+    def set_forecast_version(self, version: int):
+        """Set and load a specific forecast version."""
+        self.current_forecast_version = version
+        self.load_forecast_from_db()
+        self.update_chart_data()
+    
+    def filter_intervention(self, search_value):
         self.search_value = search_value
         self.load_gtms()
     
@@ -140,8 +196,9 @@ class GTMState(rx.State):
         
         # Add actual production data
         for prod in sorted(self.intervention_prod, key=lambda x: x.Date):
+            date_str = prod.Date.strftime("%Y-%m-%d") if isinstance(prod.Date, datetime) else str(prod.Date)
             chart_points.append({
-                "date": prod.Date,
+                "date": date_str,
                 "oilRate": prod.OilRate,
                 "liqRate": prod.LiqRate,
                 "type": "actual"
@@ -162,17 +219,120 @@ class GTMState(rx.State):
         """Set selected intervention ID and load its data."""
         self.selected_id = id_value
         self.forecast_data = []
+        self.current_forecast_version = 0
         self.load_production_data()
 
     def set_forecast_end_date(self, date: str):
         """Set the forecast end date."""
         self.forecast_end_date = date
 
+    def _get_next_forecast_version(self, session, unique_id: str) -> int:
+        """Determine the next forecast version number using FIFO logic.
+        
+        Returns the version number to use (1, 2, or 3).
+        If all 3 versions exist, removes the oldest and returns its version number.
+        """
+        # Get existing forecast versions with their creation timestamps
+        existing_versions = session.exec(
+            select(InterventionProd.Version, func.min(InterventionProd.CreatedAt))
+            .where(
+                InterventionProd.UniqueId == unique_id,
+                InterventionProd.Version > 0
+            )
+            .group_by(InterventionProd.Version)
+        ).all()
+        
+        if not existing_versions:
+            return 1
+        
+        used_versions = [v[0] for v in existing_versions]
+        
+        # If less than MAX_FORECAST_VERSIONS, find next available
+        if len(used_versions) < MAX_FORECAST_VERSIONS:
+            for v in range(1, MAX_FORECAST_VERSIONS + 1):
+                if v not in used_versions:
+                    return v
+        
+        # All versions used - find oldest by CreatedAt and remove it (FIFO)
+        oldest_version = min(existing_versions, key=lambda x: x[1])[0]
+        
+        # Delete oldest version's records
+        session.exec(
+            delete(InterventionProd).where(
+                InterventionProd.UniqueId == unique_id,
+                InterventionProd.Version == oldest_version
+            )
+        )
+        session.commit()
+        
+        return oldest_version
+    
+    def _save_forecast_to_db(self, unique_id: str, forecast_points: list[dict]) -> int:
+        """Save forecast data to InterventionProd table with version control.
+        
+        Args:
+            unique_id: The well/intervention identifier
+            forecast_points: List of forecast data points with date, oilRate, liqRate
+            
+        Returns:
+            The version number used for this forecast
+        """
+        try:
+            with rx.session() as session:
+                # Determine next version using FIFO
+                version = self._get_next_forecast_version(session, unique_id)
+                
+                # Calculate cumulative production
+                cum_oil = 0.0
+                cum_liq = 0.0
+                prev_date = None
+                
+                created_at = datetime.now()
+                
+                for point in forecast_points:
+                    date = datetime.strptime(point["date"], "%Y-%m-%d")
+                    oil_rate = point["oilRate"]
+                    liq_rate = point["liqRate"]
+                    
+                    # Calculate cumulative (simple monthly integration)
+                    if prev_date:
+                        days = (date - prev_date).days
+                        cum_oil += oil_rate * days
+                        cum_liq += liq_rate * days
+                    
+                    # Calculate water cut
+                    wc = ((liq_rate - oil_rate) / liq_rate * 100) if liq_rate > 0 else 0
+                    
+                    # Create record
+                    prod_record = InterventionProd(
+                        UniqueId=unique_id,
+                        Date=date,
+                        Version=version,
+                        DataType="Forecast",
+                        OilRate=oil_rate,
+                        OilProd=cum_oil,
+                        LiqRate=liq_rate,
+                        LiqProd=cum_liq,
+                        WC=max(0, min(100, wc)),  # Clamp to 0-100%
+                        CreatedAt=created_at
+                    )
+                    session.add(prod_record)
+                    prev_date = date
+                
+                session.commit()
+                return version
+                
+        except Exception as e:
+            print(f"Error saving forecast to DB: {e}")
+            raise
+
     def run_forecast(self):
         """Run Arps decline curve forecast for selected intervention.
         
         For 'Plan' status: Uses PlanningDate as start date with parameters from InterventionID
         For 'Done' status: Uses last production data as start point
+        
+        After generating forecast, saves to InterventionProd table with version control (FIFO, max 3).
         """
         if not self.current_gtm or not self.forecast_end_date:
             return rx.toast.error("Please select an intervention and set forecast end date")
@@ -193,7 +353,6 @@ class GTMState(rx.State):
             if self.current_gtm.Status == "Plan":
                 # For planned interventions: start from PlanningDate with design parameters
                 start_date = datetime.strptime(self.current_gtm.PlanningDate, "%Y-%m-%d")
-                # Use design parameters as-is
                 
             else:
                 # For completed interventions: use last production data if available
@@ -202,7 +361,12 @@ class GTMState(rx.State):
                 
                 sorted_prod = sorted(self.intervention_prod, key=lambda x: x.Date)
                 last_prod = sorted_prod[-1]
-                start_date = datetime.strptime(last_prod.Date, "%Y-%m-%d")
+                
+                # Handle Date field (could be datetime or string)
+                if isinstance(last_prod.Date, datetime):
+                    start_date = last_prod.Date
+                else:
+                    start_date = datetime.strptime(str(last_prod.Date), "%Y-%m-%d")
                 
                 # Use last actual rates as starting point
                 qi_oil = last_prod.OilRate if last_prod.OilRate > 0 else qi_oil
@@ -237,15 +401,59 @@ class GTMState(rx.State):
                 current_date += timedelta(days=30)
                 t += 1
             
+            if not forecast_points:
+                return rx.toast.error("No forecast points generated. Check date range.")
+            
+            # Save forecast to database with FIFO version control
+            version = self._save_forecast_to_db(self.selected_id, forecast_points)
+            
+            # Update state
             self.forecast_data = forecast_points
+            self.current_forecast_version = version
+            
+            # Reload available versions
+            with rx.session() as session:
+                forecast_versions = session.exec(
+                    select(InterventionProd.Version).where(
+                        InterventionProd.UniqueId == self.selected_id,
+                        InterventionProd.Version > 0
+                    ).distinct()
+                ).all()
+                self.available_forecast_versions = sorted(forecast_versions)
+            
             self.update_chart_data()
             
             status_msg = "planned intervention" if self.current_gtm.Status == "Plan" else "completed intervention"
-            return rx.toast.success(f"Forecast generated for {status_msg} with {len(forecast_points)} points")
+            return rx.toast.success(
+                f"Forecast v{version} saved for {status_msg} with {len(forecast_points)} points"
+            )
             
         except Exception as e:
             print(f"Forecast error: {e}")
             return rx.toast.error(f"Forecast failed: {str(e)}")
+
+    def delete_forecast_version(self, version: int):
+        """Delete a specific forecast version."""
+        if version == 0:
+            return rx.toast.error("Cannot delete actual production data")
+        
+        try:
+            with rx.session() as session:
+                session.exec(
+                    delete(InterventionProd).where(
+                        InterventionProd.UniqueId == self.selected_id,
+                        InterventionProd.Version == version
+                    )
+                )
+                session.commit()
+            
+            # Reload data
+            self.load_production_data()
+            return rx.toast.success(f"Forecast version {version} deleted")
+            
+        except Exception as e:
+            print(f"Delete forecast error: {e}")
+            return rx.toast.error(f"Failed to delete forecast: {str(e)}")
 
     async def handle_excel_upload(self, files: list[rx.UploadFile]):
         """Handle Excel file upload for interventions."""
@@ -352,8 +560,6 @@ class GTMState(rx.State):
                 session.commit()
                 session.refresh(new_gtm)
             
-            # Close dialog and reload data
-            #self.add_dialog_open = False
             self.load_gtms()
             return rx.toast.success("GTM added successfully!")
             
@@ -366,11 +572,7 @@ class GTMState(rx.State):
         self.current_gtm = gtm
 
     def update_gtm(self, form_data: dict):
-        """Update existing GTM in database with partial update support.
-        
-        Only updates fields that have values in form_data.
-        Distinguishes between empty fields (keep existing) and new values (update).
-        """
+        """Update existing GTM in database with partial update support."""
         try:
             with rx.session() as session:
                 gtm_to_update = session.exec(
@@ -384,10 +586,10 @@ class GTMState(rx.State):
                     string_fields = ["Field", "Platform", "Reservoir", "TypeGTM", "PlanningDate", "Status"]
                     for field in string_fields:
                         value = form_data.get(field)
-                        if value and str(value).strip():  # Check for non-empty string
+                        if value and str(value).strip():
                             setattr(gtm_to_update, field, value)
                     
-                    # Update numeric fields - accept any valid number including 0
+                    # Update numeric fields
                     numeric_fields = [
                         ("InitialORate", "InitialORate"),
                         ("bo", "bo"),
@@ -398,13 +600,11 @@ class GTMState(rx.State):
                     ]
                     for form_key, model_field in numeric_fields:
                         value = form_data.get(form_key)
-                        # Only skip if value is None or empty string
                         if value is not None and value != "":
                             try:
                                 numeric_value = float(value)
                                 setattr(gtm_to_update, model_field, numeric_value)
                             except (ValueError, TypeError):
-                                # Keep existing value if conversion fails
                                 pass
                     
                     session.add(gtm_to_update)
@@ -466,7 +666,7 @@ class GTMState(rx.State):
         """Get production data formatted for table display."""
         return [
             {
-                "Date": p.Date,
+                "Date": p.Date.strftime("%Y-%m-%d") if isinstance(p.Date, datetime) else str(p.Date),
                 "OilRate": f"{p.OilRate:.1f}",
                 "LiqRate": f"{p.LiqRate:.1f}",
                 "WC": f"{p.WC:.1f}"
@@ -485,3 +685,18 @@ class GTMState(rx.State):
             }
             for f in self.forecast_data[:10]
         ]
+    
+    @rx.var
+    def forecast_version_options(self) -> list[str]:
+        """Get available forecast versions as string options for dropdown."""
+        return [f"v{v}" for v in self.available_forecast_versions]
+    
+    def set_forecast_version_from_str(self, version_str: str):
+        """Convert 'v1' -> 1 in backend."""
+        if version_str and version_str.startswith("v"):
+            version = int(version_str[1:])
+            self.set_forecast_version(version)
+
+    def delete_current_forecast_version(self):
+        """Wrapper to delete current version without frontend lambda."""
+        return self.delete_forecast_version(self.current_forecast_version)
