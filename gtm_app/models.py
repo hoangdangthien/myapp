@@ -1,13 +1,15 @@
 """Database models for Well Intervention Management."""
 import reflex as rx
 import sqlmodel
+import sqlalchemy as sa
+from datetime import datetime
 
 
 class Intervention(rx.Model, table=True):
     """The intervention ID information - stores well intervention records."""
     __tablename__ = "InterventionID"
     
-    UniqueId: str = sqlmodel.Field(primary_key=True)
+    UniqueId: str = sqlmodel.Field(primary_key=True,max_length=255)
     Field: str
     Platform: str
     Reservoir: str
@@ -26,8 +28,8 @@ class InterventionProd(rx.Model, table=True):
     """The intervention production information - stores production history."""
     __tablename__ = "InterventionProd"
     
-    UniqueId: str = sqlmodel.Field(primary_key=True)
-    Date: str = sqlmodel.Field(primary_key=True)
+    UniqueId: str = sqlmodel.Field(primary_key=True,max_length=255)
+    Date: datetime = sqlmodel.Field(primary_key=True)
     OilRate: float      # Oil production rate (bbl/day)
     OilProd: float      # Cumulative oil production (bbl)
     LiqRate: float      # Liquid production rate (bbl/day)
@@ -36,8 +38,8 @@ class InterventionProd(rx.Model, table=True):
 
 class HistoryProd(rx.Model,table=True):
     __tablename__="HistoryProd"
-    UniqueId: str = sqlmodel.Field(primary_key=True)
-    Date : str = sqlmodel.Field(primary_key=True)
+    UniqueId: str = sqlmodel.Field(primary_key=True,max_length=255)
+    Date : datetime = sqlmodel.Field(primary_key=True)
     Dayon : float
     Method: str
     Qoil:float
@@ -52,7 +54,7 @@ class HistoryProd(rx.Model,table=True):
     Note:str
 class Master(rx.Model,table=True):
     __tablename__="Master"
-    UniqueId:str=sqlmodel.Field(primary_key=True)
+    UniqueId:str=sqlmodel.Field(primary_key=True,max_length=255)
     Wellname:str
     X_top:float
     Y_top:float
