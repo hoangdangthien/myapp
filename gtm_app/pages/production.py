@@ -1,98 +1,121 @@
-"""Production monitoring page."""
+"""Production monitoring page with MSSQL Server integration."""
 import reflex as rx
 from ..templates.template import template
+from ..states.base_state import BaseState
+from ..components.production_components import (
+    connection_dialog,
+    filter_controls,
+    master_table,
+    stats_summary,
+)
 
 
 @template(
     route="/",
     title="Production | GTM Dashboard",
-    description="Production monitoring and analysis",
+    description="Production monitoring and well master data",
+    on_load=BaseState.load_master_data,
 )
 def production_page() -> rx.Component:
-    """Production monitoring page content.
+    """Production monitoring page with Master table from MSSQL Server.
     
-    This page will contain:
-    - Production rate monitoring charts
-    - Cumulative production tracking
-    - Decline curve analysis
-    - Production forecasting
+    Features:
+    - Connect to external MSSQL Server database (OFM)
+    - Display Master table with well information
+    - Filter and search capabilities
+    - Connection status monitoring
     """
     return rx.vstack(
+        # Page Header
         rx.hstack(
-            rx.heading("Production Monitoring", size="7"),
+            rx.vstack(
+                rx.heading("Production Monitoring", size="7"),
+                align="center",
+                spacing="1",
+            ),
             rx.spacer(),
-            rx.badge("Coming Soon", color_scheme="blue", size="2"),
+            rx.hstack(
+                connection_dialog(),
+                rx.button(
+                    rx.icon("refresh-cw", size=16),
+                    rx.text("Refresh", size="2"),
+                    on_click=BaseState.load_master_data,
+                    size="2",
+                ),
+                spacing="2",
+            ),
             width="100%",
             align="center",
         ),
         rx.divider(),
+        
+        # Statistics Summary
+        stats_summary(),
+        
+        # Master Table Section
         rx.card(
             rx.vstack(
-                rx.icon("bar-chart-3", size=48, color=rx.color("gray", 8)),
-                rx.heading("Production Dashboard", size="5"),
-                rx.text(
-                    "This page will contain production monitoring features including:",
-                    color=rx.color("gray", 11),
-                    text_align="center",
+                # Table Header with Controls
+                rx.hstack(
+                    rx.heading("Master Table", size="5"),
+                    rx.spacer(),
+                    filter_controls(),
+                    width="100%",
+                    align="center",
                 ),
-                rx.vstack(
-                    rx.hstack(
-                        rx.icon("trending-up", size=16),
-                        rx.text("Real-time production rate monitoring"),
+                rx.divider(),
+                
+                # Master Table
+                rx.cond(
+                    BaseState.total_wells > 0,
+                    master_table(),
+                    rx.vstack(
+                        rx.icon("database", size=48, color=rx.color("gray", 8)),
+                        rx.text(
+                            "No data available",
+                            size="4",
+                            color=rx.color("gray", 10),
+                        ),
+                        rx.text(
+                            "Click 'Refresh' to load data from MSSQL Server",
+                            size="2",
+                            color=rx.color("gray", 9),
+                        ),
+                        align="center",
+                        spacing="2",
+                        padding="3em",
                     ),
-                    rx.hstack(
-                        rx.icon("line-chart", size=16),
-                        rx.text("Decline curve analysis (DCA)"),
-                    ),
-                    rx.hstack(
-                        rx.icon("calculator", size=16),
-                        rx.text("Production forecasting with Arps model"),
-                    ),
-                    rx.hstack(
-                        rx.icon("layers", size=16),
-                        rx.text("Field-level and well-level aggregation"),
-                    ),
-                    align="start",
+                ),
+                
+                spacing="3",
+                width="100%",
+            ),
+            padding="1.5em",
+            width="100%",
+        ),
+        
+        # Future Production Analytics Placeholder
+        rx.card(
+            rx.vstack(
+                rx.hstack(
+                    rx.icon("trending-up", size=20, color=rx.color("gray", 9)),
+                    rx.heading("Production Analytics", size="4"),
+                    rx.badge("Coming Soon", color_scheme="blue", size="2"),
                     spacing="2",
                 ),
+                rx.text(
+                    "Future features: Production rate monitoring, decline curve analysis, "
+                    "forecasting, and field-level aggregation",
+                    color=rx.color("gray", 10),
+                    size="2",
+                ),
+                spacing="2",
+                padding="2em",
                 align="center",
-                spacing="4",
-                padding="3em",
             ),
             width="100%",
         ),
-        rx.grid(
-            rx.card(
-                rx.vstack(
-                    rx.heading("Oil Production", size="4"),
-                    rx.text("0 bbl/day", size="6", weight="bold"),
-                    rx.text("Total: 0 bbl", size="2", color=rx.color("gray", 11)),
-                    align="center",
-                    padding="1.5em",
-                ),
-            ),
-            rx.card(
-                rx.vstack(
-                    rx.heading("Liquid Production", size="4"),
-                    rx.text("0 bbl/day", size="6", weight="bold"),
-                    rx.text("Total: 0 bbl", size="2", color=rx.color("gray", 11)),
-                    align="center",
-                    padding="1.5em",
-                ),
-            ),
-            rx.card(
-                rx.vstack(
-                    rx.heading("Water Cut", size="4"),
-                    rx.text("0 %", size="6", weight="bold"),
-                    rx.text("Average", size="2", color=rx.color("gray", 11)),
-                    align="center",
-                    padding="1.5em",
-                ),
-            ),
-            columns="3",
-            spacing="4",
-            width="100%",
-        ),
+        
         align="start",
         spacing="4",
         width="100%",
