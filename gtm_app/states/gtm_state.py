@@ -6,21 +6,21 @@ from datetime import datetime, timedelta
 import numpy as np
 from sqlmodel import String, asc, cast, desc, func, or_, select, delete
 
-from ..models import Intervention, InterventionProd, MAX_FORECAST_VERSIONS
+from ..models import Intervention, InterventionProd, HistoryProd, MAX_FORECAST_VERSIONS
 
 
 class GTMState(rx.State):
     """State for managing Well Intervention (GTM) data.
     
     Handles CRUD operations, Excel import, forecasting with version control,
-    and data transformations.
+    and data transformations. Uses HistoryProd table for actual production data.
     """
     
     # List of all interventions
     GTM: list[Intervention] = []
     
-    # Production data for selected intervention
-    intervention_prod: list[InterventionProd] = []
+    # Historical production data from HistoryProd table (last 5 years)
+    history_prod: list[dict] = []
     
     # Data transformed for graph visualization
     gtms_for_graph: list[dict] = []
@@ -106,23 +106,57 @@ class GTMState(rx.State):
             self.GTM = []
 
     def load_production_data(self):
-        """Load production data for selected intervention."""
+        """Load production data for selected intervention from HistoryProd table.
+        
+        Fetches historical production data for the last 5 years and calculates
+        Water Cut (WC) from Oilrate and Liqrate fields.
+        
+        WC Calculation: WC = (Liqrate - Oilrate) / Liqrate * 100
+        """
         if not self.selected_id:
-            self.intervention_prod = []
+            self.history_prod = []
             self.chart_data = []
             return
             
         try:
+            # Calculate date 5 years ago for filtering
+            five_years_ago = datetime.now() - timedelta(days=5*365)
+            
             with rx.session() as session:
-                # Load only actual production data (Version = 0)
-                self.intervention_prod = session.exec(
-                    InterventionProd.select().where(
-                        InterventionProd.UniqueId == self.selected_id,
-                        InterventionProd.Version == 0  # Actual data only
-                    )
+                # Load historical production data from HistoryProd table (last 5 years)
+                history_records = session.exec(
+                    select(HistoryProd).where(
+                        HistoryProd.UniqueId == self.selected_id,
+                        HistoryProd.Date >= five_years_ago
+                    ).order_by(desc(HistoryProd.Date))
                 ).all()
                 
-                # Load available forecast versions
+                # Convert HistoryProd to internal format with calculated WC
+                self.history_prod = []
+                for rec in history_records:
+                    # Calculate Water Cut: WC = (Liqrate - Oilrate) / Liqrate * 100
+                    # This gives percentage of water in total liquid production
+                    wc = 0.0
+                    oil_rate = rec.Oilrate if rec.Oilrate else 0.0
+                    liq_rate = rec.Liqrate if rec.Liqrate else 0.0
+                    
+                    if liq_rate > 0:
+                        wc = ((liq_rate - oil_rate) / liq_rate) * 100
+                        wc = max(0.0, min(100.0, wc))  # Clamp to 0-100%
+                    
+                    self.history_prod.append({
+                        "UniqueId": rec.UniqueId,
+                        "Date": rec.Date,
+                        "OilRate": oil_rate,
+                        "LiqRate": liq_rate,
+                        "WC": round(wc, 2),
+                        "GOR": rec.GOR if rec.GOR else 0.0,
+                        "Qgas": rec.Qgas if rec.Qgas else 0.0,
+                        "Method": rec.Method if rec.Method else "",
+                        "Dayon": rec.Dayon if rec.Dayon else 0.0
+                    })
+                
+                # Load available forecast versions from InterventionProd
                 forecast_versions = session.exec(
                     select(InterventionProd.Version).where(
                         InterventionProd.UniqueId == self.selected_id,
@@ -151,7 +185,7 @@ class GTMState(rx.State):
             
         except Exception as e:
             print(f"Error loading production data: {e}")
-            self.intervention_prod = []
+            self.history_prod = []
     
     def load_forecast_from_db(self):
         """Load forecast data for current version from database."""
@@ -191,16 +225,18 @@ class GTMState(rx.State):
         self.load_gtms()
     
     def update_chart_data(self):
-        """Update chart data combining actual and forecast."""
+        """Update chart data combining actual history and forecast."""
         chart_points = []
         
-        # Add actual production data
-        for prod in sorted(self.intervention_prod, key=lambda x: x.Date):
-            date_str = prod.Date.strftime("%Y-%m-%d") if isinstance(prod.Date, datetime) else str(prod.Date)
+        # Add actual production data from HistoryProd (sorted by date ascending)
+        sorted_history = sorted(self.history_prod, key=lambda x: x["Date"])
+        for prod in sorted_history:
+            date_val = prod["Date"]
+            date_str = date_val.strftime("%Y-%m-%d") if isinstance(date_val, datetime) else str(date_val)
             chart_points.append({
                 "date": date_str,
-                "oilRate": prod.OilRate,
-                "liqRate": prod.LiqRate,
+                "oilRate": prod["OilRate"],
+                "liqRate": prod["LiqRate"],
                 "type": "actual"
             })
         
@@ -356,21 +392,22 @@ class GTMState(rx.State):
                 
             else:
                 # For completed interventions: use last production data if available
-                if not self.intervention_prod:
+                if not self.history_prod:
                     return rx.toast.error("No production data available for forecasting")
                 
-                sorted_prod = sorted(self.intervention_prod, key=lambda x: x.Date)
+                # Sort by date and get latest record
+                sorted_prod = sorted(self.history_prod, key=lambda x: x["Date"])
                 last_prod = sorted_prod[-1]
                 
                 # Handle Date field (could be datetime or string)
-                if isinstance(last_prod.Date, datetime):
-                    start_date = last_prod.Date
+                if isinstance(last_prod["Date"], datetime):
+                    start_date = last_prod["Date"]
                 else:
-                    start_date = datetime.strptime(str(last_prod.Date), "%Y-%m-%d")
+                    start_date = datetime.strptime(str(last_prod["Date"]), "%Y-%m-%d")
                 
                 # Use last actual rates as starting point
-                qi_oil = last_prod.OilRate if last_prod.OilRate > 0 else qi_oil
-                qi_liq = last_prod.LiqRate if last_prod.LiqRate > 0 else qi_liq
+                qi_oil = last_prod["OilRate"] if last_prod["OilRate"] > 0 else qi_oil
+                qi_liq = last_prod["LiqRate"] if last_prod["LiqRate"] > 0 else qi_liq
             
             if end_date <= start_date:
                 return rx.toast.error(f"Forecast end date must be after {start_date.strftime('%Y-%m-%d')}")
@@ -572,7 +609,10 @@ class GTMState(rx.State):
         self.current_gtm = gtm
 
     def update_gtm(self, form_data: dict):
-        """Update existing GTM in database with partial update support."""
+        """Update existing GTM in database with partial update support.
+        
+        After updating, refreshes current_gtm to ensure forecast uses latest values.
+        """
         try:
             with rx.session() as session:
                 gtm_to_update = session.exec(
@@ -610,7 +650,19 @@ class GTMState(rx.State):
                     session.add(gtm_to_update)
                     session.commit()
                     
+                    # Refresh the session to get updated data
+                    session.refresh(gtm_to_update)
+                    
+                    # Update current_gtm with fresh data so forecast uses new values
+                    self.current_gtm = gtm_to_update
+                    
+            # Reload GTM list to reflect changes in table
             self.load_gtms()
+            
+            # If this is the selected intervention, also update intervention_date
+            if self.selected_id == self.current_gtm.UniqueId:
+                self.intervention_date = self.current_gtm.PlanningDate
+            
             return rx.toast.success("GTM updated successfully!")
             
         except Exception as e:
@@ -663,15 +715,26 @@ class GTMState(rx.State):
     
     @rx.var
     def production_table_data(self) -> list[dict]:
-        """Get production data formatted for table display."""
+        """Get production data formatted for table display (last 24 records).
+        
+        Data sourced from HistoryProd table with calculated WC.
+        Shows last 24 records, or all records if fewer than 24 available.
+        """
+        # Sort by date descending and take up to 24 records
+        sorted_data = sorted(
+            self.history_prod, 
+            key=lambda x: x["Date"], 
+            reverse=True
+        )[:24]  # Take last 24 records (or all if less than 24)
+        
         return [
             {
-                "Date": p.Date.strftime("%Y-%m-%d") if isinstance(p.Date, datetime) else str(p.Date),
-                "OilRate": f"{p.OilRate:.1f}",
-                "LiqRate": f"{p.LiqRate:.1f}",
-                "WC": f"{p.WC:.1f}"
+                "Date": p["Date"].strftime("%Y-%m-%d") if isinstance(p["Date"], datetime) else str(p["Date"]),
+                "OilRate": f"{p['OilRate']:.1f}",
+                "LiqRate": f"{p['LiqRate']:.1f}",
+                "WC": f"{p['WC']:.1f}"
             }
-            for p in sorted(self.intervention_prod, key=lambda x: x.Date, reverse=True)[:10]
+            for p in sorted_data
         ]
     
     @rx.var
@@ -700,3 +763,23 @@ class GTMState(rx.State):
     def delete_current_forecast_version(self):
         """Wrapper to delete current version without frontend lambda."""
         return self.delete_forecast_version(self.current_forecast_version)
+    
+    @rx.var
+    def history_record_count(self) -> int:
+        """Get count of history production records loaded."""
+        return len(self.history_prod)
+    
+    @rx.var
+    def date_range_display(self) -> str:
+        """Get date range of loaded history data."""
+        if not self.history_prod:
+            return "No data"
+        
+        dates = [p["Date"] for p in self.history_prod]
+        min_date = min(dates)
+        max_date = max(dates)
+        
+        min_str = min_date.strftime("%Y-%m-%d") if isinstance(min_date, datetime) else str(min_date)
+        max_str = max_date.strftime("%Y-%m-%d") if isinstance(max_date, datetime) else str(max_date)
+        
+        return f"{min_str} to {max_str}"
