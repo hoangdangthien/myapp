@@ -165,15 +165,15 @@ def production_rate_chart() -> rx.Component:
                     label="GTM",
                     stroke_width=2,
                 ),
-                rx.recharts.x_axis(data_key="date", angle=-45, text_anchor="end", height=80),
-                rx.recharts.y_axis(label={"value": "Rate (t/day)", "angle": -90, "position": "Center"}),
+                rx.recharts.x_axis(data_key="date", angle=-45, text_anchor="end", height=80,tick={"fontSize":12}),
+                rx.recharts.y_axis(label={"value": "Rate (t/day)", "angle": -90, "position": "Center", "offset":30},tick={"fontSize":12}),
                 rx.recharts.cartesian_grid(stroke_dasharray="3 3"),
                 rx.recharts.graphing_tooltip(),
                 rx.recharts.legend(),
                 data=GTMState.chart_data,
                 width="100%",
                 height=350,
-                margin={"bottom": 10, "left": 10, "right": 20, "top": 10},
+                margin={"bottom": 10, "left": 20, "right": 20, "top": 10},
             ),
             # Legend
             rx.hstack(

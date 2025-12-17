@@ -16,7 +16,7 @@ def search_gtm():
                     rx.input(
                         rx.input.slot(rx.icon("search")),
                         placeholder="Search intervention...",
-                        size="2",
+                        size="1",
                         width="100%",
                         max_width="225px",
                         variant="surface",
@@ -29,9 +29,9 @@ def add_gtm_button() -> rx.Component:
     return rx.dialog.root(
         rx.dialog.trigger(
             rx.button(
-                rx.icon("plus", size=16),
+                rx.icon("plus", size=14),
                 rx.text("Add Intervention", size="2"),
-                size="2",
+                size="1",
             ),
         ),
         rx.dialog.content(
@@ -100,10 +100,10 @@ def load_excel_button() -> rx.Component:
     return rx.dialog.root(
         rx.dialog.trigger(
             rx.button(
-                rx.icon("file-spreadsheet", size=16),
+                rx.icon("file-spreadsheet", size=14),
                 rx.text("Load Excel", size="2"),
                 variant="soft",
-                size="2",
+                size="1",
             ),
         ),
         rx.dialog.content(

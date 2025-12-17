@@ -22,7 +22,7 @@ def show_intervention(gtm: Intervention) -> rx.Component:
             rx.badge(
                 gtm.Status,
                 color_scheme=rx.cond(
-                    gtm.Status == "Completed",
+                    gtm.Status == "Done",
                     "green",
                     rx.cond(
                         gtm.Status == "In Progress",
@@ -89,7 +89,11 @@ def gtm_table() -> rx.Component:
 
 
 def production_record_table() -> rx.Component:
-    """Table showing production records for selected intervention."""
+    """Table showing production records from HistoryProd for selected intervention.
+    
+    Displays the last 24 records (or all if fewer) with calculated Water Cut (WC).
+    Data is filtered to last 5 years from HistoryProd table.
+    """
     return rx.box(
         rx.table.root(
             rx.table.header(
@@ -107,7 +111,22 @@ def production_record_table() -> rx.Component:
                         rx.table.cell(rx.text(row["Date"], size="1")),
                         rx.table.cell(rx.text(row["OilRate"], size="1")),
                         rx.table.cell(rx.text(row["LiqRate"], size="1")),
-                        rx.table.cell(rx.text(row["WC"], size="1")),
+                        rx.table.cell(
+                            rx.badge(
+                                row["WC"],
+                                color_scheme=rx.cond(
+                                    row["WC"].to(float) > 80,
+                                    "red",
+                                    rx.cond(
+                                        row["WC"].to(float) > 50,
+                                        "yellow",
+                                        "green"
+                                    )
+                                ),
+                                size="1"
+                            )
+                        ),
+                        style={"_hover": {"bg": rx.color("gray", 3)}},
                     )
                 ),
             ),
@@ -116,7 +135,7 @@ def production_record_table() -> rx.Component:
             width="100%",
         ),
         overflow_y="auto",
-        max_height="200px",
+        max_height="250px",  # Increased height to show up to 24 records
         width="100%",
     )
 
@@ -139,6 +158,7 @@ def forecast_result_table() -> rx.Component:
                         rx.table.cell(rx.text(row["Date"], size="1")),
                         rx.table.cell(rx.text(row["OilRate"], size="1")),
                         rx.table.cell(rx.text(row["LiqRate"], size="1")),
+                        style={"_hover": {"bg": rx.color("blue", 2)}},
                     )
                 ),
             ),
@@ -147,6 +167,31 @@ def forecast_result_table() -> rx.Component:
             width="100%",
         ),
         overflow_y="auto",
-        max_height="200px",
+        max_height="250px",
         width="100%",
+    )
+
+
+def history_stats_card() -> rx.Component:
+    """Display statistics about loaded history data."""
+    return rx.card(
+        rx.hstack(
+            rx.vstack(
+                rx.text("Records Loaded", size="1", color=rx.color("gray", 10)),
+                rx.text(GTMState.history_record_count, weight="bold", size="3"),
+                spacing="0",
+                align="start",
+            ),
+            rx.divider(orientation="vertical", size="2"),
+            rx.vstack(
+                rx.text("Date Range (5 years)", size="1", color=rx.color("gray", 10)),
+                rx.text(GTMState.date_range_display, size="2"),
+                spacing="0",
+                align="start",
+            ),
+            spacing="4",
+            width="100%",
+        ),
+        padding="0.75em",
+        variant="surface",
     )
