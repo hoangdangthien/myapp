@@ -8,12 +8,13 @@ from datetime import datetime
 class Intervention(rx.Model, table=True):
     """The intervention ID information - stores well intervention records."""
     __tablename__ = "InterventionID"
-    
-    UniqueId: str = sqlmodel.Field(primary_key=True, max_length=255)
+    ID : int = sqlmodel.Field(primary_key=True)
+    UniqueId: str 
     Field: str
     Platform: str
     Reservoir: str
     TypeGTM: str
+    Category: str        #using drilling platform, not using platform
     PlanningDate: str
     Status: str
     InitialORate: float  # Initial Oil Rate (bbl/day)
@@ -22,13 +23,14 @@ class Intervention(rx.Model, table=True):
     InitialLRate: float  # Initial Liquid Rate (bbl/day)
     bl: float            # Arps decline parameter b for liquid
     Dil: float           # Initial decline rate for liquid
+    Describe : str       # Describe Intervention activity
 
 
 class InterventionProd(rx.Model, table=True):
     """The intervention production information - stores production history and forecasts.
     
     Version field:
-        - 0: Actual production data
+        - 0: Base case forecast from the last record of history before Intervention date and cannot delete by button
         - 1, 2, 3: Forecast versions (FIFO - max 3 versions kept)
     
     DataType field:
@@ -48,6 +50,33 @@ class InterventionProd(rx.Model, table=True):
     CreatedAt: datetime = sqlmodel.Field(default_factory=datetime.now)
 
 
+
+
+
+class CompletionID(rx.Model, table=True):
+    __tablename__ = "CompletionID"
+    UniqueId: str = sqlmodel.Field(primary_key=True, max_length=255)
+    Wellname: str 
+    X_top: float
+    Y_top: float
+    X_bot: float
+    Y_bot: float
+    Reservoir : str
+    kh : float
+
+class WellID(rx.Model,table=True):
+    __tablename__ = "WellID"
+    Wellname : str = sqlmodel.Field(primary_key=True,max_length=255)
+    X_coord : float
+    Y_coord : float
+    Platform : str
+    Region : str
+    Field : str
+    Block : str
+    VSPShare : float
+    WellCategory : str      #OIL,GAS,COND,INJ
+    WellStatus : str        #Working, Abandone        
+
 class HistoryProd(rx.Model, table=True):
     __tablename__ = "HistoryProd"
     UniqueId: str = sqlmodel.Field(primary_key=True, max_length=255)
@@ -64,17 +93,19 @@ class HistoryProd(rx.Model, table=True):
     Liqrate: float
     Gasrate: float
     Note: str
-
-
-class Master(rx.Model, table=True):
-    __tablename__ = "Master"
-    UniqueId: str = sqlmodel.Field(primary_key=True, max_length=255)
-    Wellname: str
-    X_top: float
-    Y_top: float
-    X_bot: float
-    Y_bot: float
-    
+class ProductionForecast(rx.Model,table=True):
+    __tablename__ = "ProductionForecast"
+    UniqueId:str = sqlmodel.Field(primary_key=True,max_length=255)
+    Date : datetime = sqlmodel.Field(primary_key=True)
+    Oilrate : float
+    Liqrate : float
+    Qoil : float
+    Qliq : float
+class KMonth(rx.Model,table=True):
+    __tablename__ = "KMonth"
+    MonthID : int 
+    K_oil : float
+    K_liq : float
 
 # Field options for dropdown selections
 FIELD_OPTIONS = [
