@@ -50,9 +50,6 @@ class InterventionProd(rx.Model, table=True):
     CreatedAt: datetime = sqlmodel.Field(default_factory=datetime.now)
 
 
-
-
-
 class CompletionID(rx.Model, table=True):
     __tablename__ = "CompletionID"
     UniqueId: str = sqlmodel.Field(primary_key=True, max_length=255)
@@ -62,7 +59,9 @@ class CompletionID(rx.Model, table=True):
     X_bot: float
     Y_bot: float
     Reservoir : str
+    Completion: str
     kh : float
+    Decline : float
 
 class WellID(rx.Model,table=True):
     __tablename__ = "WellID"
