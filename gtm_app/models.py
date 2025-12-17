@@ -96,10 +96,14 @@ class ProductionForecast(rx.Model,table=True):
     __tablename__ = "ProductionForecast"
     UniqueId:str = sqlmodel.Field(primary_key=True,max_length=255)
     Date : datetime = sqlmodel.Field(primary_key=True)
+    Version: int = sqlmodel.Field(default=0, primary_key=True)
     Oilrate : float
     Liqrate : float
     Qoil : float
     Qliq : float
+    WC : float
+    CreatedAt: datetime = sqlmodel.Field(default_factory=datetime.now)
+
 class KMonth(rx.Model,table=True):
     __tablename__ = "KMonth"
     MonthID : int 
