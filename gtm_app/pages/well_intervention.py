@@ -3,7 +3,12 @@ import reflex as rx
 from ..templates.template import template
 from ..states.gtm_state import GTMState
 from ..components.gtm_dialogs import add_gtm_button, load_excel_button, search_gtm
-from ..components.gtm_table import gtm_table, production_record_table, forecast_result_table
+from ..components.gtm_table import (
+    gtm_table, 
+    production_record_table, 
+    forecast_result_table,
+    history_stats_card
+)
 from ..components.gtm_charts import production_rate_chart
 
 
@@ -44,7 +49,7 @@ def forecast_controls() -> rx.Component:
                 GTMState.available_ids,
                 value=GTMState.selected_id,
                 on_change=GTMState.set_selected_id,
-                size="2",
+                size="1",
                 width="150px",
             ),
             spacing="1",
@@ -55,7 +60,7 @@ def forecast_controls() -> rx.Component:
                 type="date",
                 on_change=GTMState.set_forecast_end_date,
                 width="150px",
-                size="2",
+                size="1",
             ),
             spacing="1",
         ),
@@ -63,7 +68,7 @@ def forecast_controls() -> rx.Component:
             rx.icon("trending-up", size=16),
             rx.text("Run Forecast", size="2"),
             on_click=GTMState.run_forecast,
-            size="2",
+            size="1",
         ),
         spacing="3",
         align="end",
@@ -79,15 +84,15 @@ def forecast_version_selector() -> rx.Component:
             rx.select(
                 GTMState.forecast_version_options,
                 value=f"v{GTMState.current_forecast_version}",
-                on_change=lambda v: GTMState.set_forecast_version_from_str,  # Remove 'v' prefix
+                on_change=lambda v: GTMState.set_forecast_version_from_str,
                 size="1",
                 width="80px",
             ),
-            rx.badge(
-                f"{GTMState.available_forecast_versions.length()}/3 versions",
-                color_scheme="gray",
-                size="1",
-            ),
+            #rx.badge(
+                #f"{GTMState.available_forecast_versions.length()}/3 versions",
+                #color_scheme="gray",
+                #size="1",
+            #),
             spacing="2",
             align="center",
         ),
@@ -103,7 +108,7 @@ def current_intervention_info() -> rx.Component:
             rx.hstack(
                 rx.vstack(
                     rx.text("Selected:", size="1", color=rx.color("gray", 10)),
-                    rx.text(GTMState.selected_id, weight="bold", size="2"),
+                    rx.text(GTMState.selected_id, weight="bold", size="1"),
                     spacing="0",
                 ),
                 rx.divider(orientation="vertical", size="2"),
@@ -122,33 +127,29 @@ def current_intervention_info() -> rx.Component:
                 ),
                 rx.divider(orientation="vertical", size="2"),
                 rx.vstack(
-                    rx.text("Date:", size="1", color=rx.color("gray", 10)),
-                    rx.text(GTMState.intervention_date, size="2"),
+                    rx.text("Date:", size="1", color=rx.color("gray", 9)),
+                    rx.text(GTMState.intervention_date, size="1"),
                     spacing="0",
                 ),
                 rx.divider(orientation="vertical", size="2"),
+                rx.badge(
                 rx.vstack(
-                    rx.text("qi_o / b_o / Di_o:", size="1", color=rx.color("gray", 10)),
+                    rx.text("qi_o / b_o / Di_o:", size="1", color=rx.color("gray", 9)),
                     rx.text(
                         rx.cond(
                             GTMState.current_gtm,
                             f"{GTMState.current_gtm.InitialORate:.0f} / {GTMState.current_gtm.bo:.2f} / {GTMState.current_gtm.Dio:.3f}",
                             "-"
                         ),
-                        size="2"
+                        size="1"
                     ),
                     spacing="0",
                 ),
-                spacing="4",
-                padding="0.5em",
-                background=rx.color("gray", 2),
-                border_radius="6px",
-                width="100%",
-            ),
-            # Forecast version selector row
-            rx.hstack(
+                color_scheme="green",
+                ),
+                rx.divider(orientation="vertical", size="2"),
                 forecast_version_selector(),
-                rx.spacer(),
+                rx.divider(orientation="vertical", size="2"),
                 rx.cond(
                     GTMState.current_forecast_version > 0,
                     rx.button(
@@ -161,11 +162,16 @@ def current_intervention_info() -> rx.Component:
                     ),
                     rx.fragment(),
                 ),
+                spacing="4",
+                padding="0.5em",
+                background=rx.color("gray", 2),
+                border_radius="6px",
                 width="100%",
-                align="center",
             ),
+            # History data stats (from HistoryProd - last 5 years)
             spacing="2",
             width="100%",
+            #align="end",
         ),
         rx.text("Select an intervention", color=rx.color("gray", 10), size="2"),
     )
@@ -190,9 +196,14 @@ def forecast_section() -> rx.Component:
             
             # Two tables side by side
             rx.grid(
-                # Production Records
+                # Production Records (from HistoryProd - last 5 years, showing last 24)
                 rx.vstack(
-                    rx.text("Production Records (Last 10)", size="2", weight="bold"),
+                    rx.hstack(
+                        #rx.text("Production History", size="2", weight="bold"),
+                        rx.badge("Production History Last 5 Years", color_scheme="green", size="2"),
+                        spacing="2",
+                        align="center",
+                    ),
                     production_record_table(),
                     width="100%",
                     spacing="2",
@@ -200,10 +211,10 @@ def forecast_section() -> rx.Component:
                 # Forecast Results
                 rx.vstack(
                     rx.hstack(
-                        rx.text("Forecast Results", size="2", weight="bold"),
+                        #rx.text("Forecast Results", size="2", weight="bold"),
                         rx.cond(
                             GTMState.current_forecast_version > 0,
-                            rx.badge(f"v{GTMState.current_forecast_version}", color_scheme="blue", size="1"),
+                            rx.badge(f"Forecast Results v{GTMState.current_forecast_version}", color_scheme="green", size="2"),
                             rx.fragment(),
                         ),
                         spacing="2",
@@ -239,6 +250,8 @@ def well_intervention_page() -> rx.Component:
     - Bottom: Rate vs Time scatter plot with intervention line
     
     Features:
+    - Production data from HistoryProd table (last 5 years)
+    - Water Cut (WC) calculated as: WC = (Liqrate - Oilrate) / Liqrate * 100
     - Forecast versioning: Saves up to 3 forecast versions per intervention (FIFO)
     - Version selector: Switch between different forecast versions
     - Auto-save: Forecasts automatically saved to InterventionProd table
@@ -246,16 +259,9 @@ def well_intervention_page() -> rx.Component:
     return rx.vstack(
         # Page Header
         rx.hstack(
-            rx.vstack(
-                rx.heading("Well Intervention Management", size="6"),
-                rx.text(
-                    "Manage interventions and forecast production using Arps decline curve",
-                    color=rx.color("gray", 11),
-                    size="2",
-                ),
-                align="start",
-                spacing="1",
-            ),
+            
+            rx.heading("Well Intervention Management", size="6"),
+                
             rx.spacer(),
             rx.hstack(
                 rx.badge(f"Total: {GTMState.total_interventions}", color_scheme="blue"),
