@@ -1,46 +1,141 @@
-"""Production monitoring page with MSSQL Server integration."""
+"""Production monitoring page with CompletionID data and DCA forecasting."""
 import reflex as rx
 from ..templates.template import template
-from ..states.base_state import BaseState
+from ..states.production_state import ProductionState
 from ..components.production_components import (
-    connection_dialog,
-    filter_controls,
-    master_table,
-    stats_summary,
+    completion_filter_controls,
+    completion_table,
+    completion_stats_summary,
+    selected_completion_info,
+    forecast_controls,
+    production_history_table,
+    forecast_result_table,
+    production_rate_chart,
 )
+
+
+def completion_table_section() -> rx.Component:
+    """Left section: CompletionID table with controls."""
+    return rx.card(
+        rx.vstack(
+            rx.hstack(
+                rx.heading("Completion ID", size="4"),
+                rx.spacer(),
+                completion_filter_controls(),
+                width="100%",
+                align="center",
+            ),
+            rx.divider(),
+            completion_table(),
+            width="100%",
+            spacing="3",
+        ),
+        padding="1em",
+        height="100%",
+    )
+
+
+def forecast_section() -> rx.Component:
+    """Right section: Forecast controls and results."""
+    return rx.card(
+        rx.vstack(
+            rx.hstack(
+                rx.heading("Production Forecast (Exponential DCA)", size="4"),
+                rx.spacer(),
+                forecast_controls(),
+                width="100%",
+                align="center",
+            ),
+            rx.divider(),
+            
+            # Selected completion info
+            selected_completion_info(),
+            
+            # Two tables side by side
+            rx.grid(
+                # Production History
+                rx.vstack(
+                    rx.badge("Production History (Last 5 Years)", color_scheme="green", size="2"),
+                    production_history_table(),
+                    width="100%",
+                    spacing="2",
+                ),
+                # Forecast Results
+                rx.vstack(
+                    rx.cond(
+                        ProductionState.current_forecast_version > 0,
+                        rx.badge(
+                            f"Forecast Results v{ProductionState.current_forecast_version}",
+                            color_scheme="blue",
+                            size="2"
+                        ),
+                        rx.badge("No Forecast", color_scheme="gray", size="2"),
+                    ),
+                    forecast_result_table(),
+                    width="100%",
+                    spacing="2",
+                ),
+                columns="2",
+                spacing="3",
+                width="100%",
+            ),
+            
+            width="100%",
+            spacing="3",
+        ),
+        padding="1em",
+        height="100%",
+    )
 
 
 @template(
     route="/",
     title="Production | GTM Dashboard",
-    description="Production monitoring and well master data",
-    on_load=BaseState.load_master_data,
+    description="Production monitoring and DCA forecasting",
+    on_load=ProductionState.load_completions,
 )
 def production_page() -> rx.Component:
-    """Production monitoring page with Master table from MSSQL Server.
+    """Production monitoring page with CompletionID data and DCA forecasting.
     
     Features:
-    - Connect to external MSSQL Server database (OFM)
-    - Display Master table with well information
-    - Filter and search capabilities
-    - Connection status monitoring
+    - Display CompletionID table with well completion information
+    - Load HistoryProd data (last 5 years) for selected completion
+    - Run Exponential DCA forecast: q(t) = qi * exp(-Di * t)
+      - qi: Last rate from HistoryProd
+      - Di: Decline rate from CompletionID.Decline
+    - Save forecasts to ProductionForecast table (max 4 versions, FIFO)
+    - If UniqueId has planned intervention in InterventionID,
+      also save forecast to InterventionProd as version 0
+    - Version selector to switch between saved forecasts
+    - Production rate vs time chart with actual + forecast
+    
+    DCA Formula: q(t) = qi * exp(-Di * t)
+    Where:
+    - qi = Initial rate (last production rate from history)
+    - Di = Decline rate (from CompletionID.Decline)
+    - t = Time in months
     """
     return rx.vstack(
         # Page Header
         rx.hstack(
             rx.vstack(
-                rx.heading("Production Monitoring", size="7"),
-                align="center",
+                rx.heading("Production Monitoring", size="6"),
+                rx.text(
+                    "Exponential Decline Curve Analysis (DCA)",
+                    size="2",
+                    color=rx.color("gray", 10)
+                ),
                 spacing="1",
+                align="start",
             ),
             rx.spacer(),
             rx.hstack(
-                connection_dialog(),
                 rx.button(
                     rx.icon("refresh-cw", size=16),
                     rx.text("Refresh", size="2"),
-                    on_click=BaseState.load_master_data,
+                    on_click=ProductionState.load_completions,
                     size="2",
+                    variant="soft",
                 ),
                 spacing="2",
             ),
@@ -50,70 +145,44 @@ def production_page() -> rx.Component:
         rx.divider(),
         
         # Statistics Summary
-        stats_summary(),
+        completion_stats_summary(),
         
-        # Master Table Section
-        rx.card(
-            rx.vstack(
-                # Table Header with Controls
-                rx.hstack(
-                    rx.heading("Master Table", size="5"),
-                    rx.spacer(),
-                    filter_controls(),
-                    width="100%",
-                    align="center",
-                ),
-                rx.divider(),
-                
-                # Master Table
-                rx.cond(
-                    BaseState.total_wells > 0,
-                    master_table(),
-                    rx.vstack(
-                        rx.icon("database", size=48, color=rx.color("gray", 8)),
-                        rx.text(
-                            "No data available",
-                            size="4",
-                            color=rx.color("gray", 10),
-                        ),
-                        rx.text(
-                            "Click 'Refresh' to load data from MSSQL Server",
-                            size="2",
-                            color=rx.color("gray", 9),
-                        ),
-                        align="center",
-                        spacing="2",
-                        padding="3em",
-                    ),
-                ),
-                
-                spacing="3",
-                width="100%",
-            ),
-            padding="1.5em",
+        # Main content: Two columns
+        rx.grid(
+            # Left: CompletionID Table
+            completion_table_section(),
+            # Right: Forecast Section
+            forecast_section(),
+            columns="2",
+            spacing="4",
             width="100%",
         ),
         
-        # Future Production Analytics Placeholder
+        # Production Rate Chart (full width)
+        production_rate_chart(),
+        
+        # DCA Formula Reference
         rx.card(
-            rx.vstack(
-                rx.hstack(
-                    rx.icon("trending-up", size=20, color=rx.color("gray", 9)),
-                    rx.heading("Production Analytics", size="4"),
-                    rx.badge("Coming Soon", color_scheme="blue", size="2"),
-                    spacing="2",
-                ),
-                rx.text(
-                    "Future features: Production rate monitoring, decline curve analysis, "
-                    "forecasting, and field-level aggregation",
-                    color=rx.color("gray", 10),
-                    size="2",
+            rx.hstack(
+                rx.icon("info", size=16, color=rx.color("blue", 9)),
+                rx.vstack(
+                    rx.text("Exponential Decline Curve Analysis", weight="bold", size="2"),
+                    rx.text(
+                        "Formula: q(t) = qi × exp(-Di × t) | "
+                        "qi = Last production rate from history | "
+                        "Di = Decline rate from CompletionID | "
+                        "Forecast saved to ProductionForecast (max 4 versions)",
+                        size="1",
+                        color=rx.color("gray", 10)
+                    ),
+                    spacing="0",
+                    align="start",
                 ),
                 spacing="2",
-                padding="2em",
-                align="center",
+                width="100%",
             ),
-            width="100%",
+            padding="0.75em",
+            variant="surface",
         ),
         
         align="start",
