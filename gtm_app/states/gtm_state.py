@@ -359,9 +359,9 @@ class GTMState(rx.State):
                         Version=version,
                         DataType="Forecast",
                         OilRate=oil_rate,
-                        OilProd=cum_oil,
                         LiqRate=liq_rate,
-                        LiqProd=cum_liq,
+                        Qoil=cum_oil,
+                        Qliq=cum_liq,
                         WC=max(0, min(100, wc)),  # Clamp to 0-100%
                         CreatedAt=created_at
                     )
@@ -636,7 +636,7 @@ class GTMState(rx.State):
                 
                 if gtm_to_update:
                     # Update string fields only if non-empty value provided
-                    string_fields = ["Field", "Platform", "Reservoir", "TypeGTM", "PlanningDate", "Status"]
+                    string_fields = ["Field", "Platform", "Reservoir", "TypeGTM", "Category", "PlanningDate", "Status"]
                     for field in string_fields:
                         value = form_data.get(field)
                         if value and str(value).strip():
