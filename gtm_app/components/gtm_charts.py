@@ -70,7 +70,7 @@ def gtm_type_chart() -> rx.Component:
 
 
 def production_rate_chart() -> rx.Component:
-    """Line chart showing rate vs time with intervention line and phase checkboxes."""
+    """Line chart showing rate vs time with intervention line, Water Cut on secondary Y-axis."""
     return rx.card(
         rx.vstack(
             rx.hstack(
@@ -91,15 +91,21 @@ def production_rate_chart() -> rx.Component:
                         on_change=GTMState.toggle_liquid,
                         color_scheme="blue",
                     ),
+                    rx.checkbox(
+                        "Water Cut",
+                        checked=GTMState.show_wc,
+                        on_change=GTMState.toggle_wc,
+                        color_scheme="red",
+                    ),
                     spacing="3",
                     align="center",
                 ),
                 width="100%",
                 align="center",
             ),
-            # Chart showing all phases (conditionally rendered based on checkboxes)
+            # Chart with dual Y-axes
             rx.recharts.composed_chart(
-                # Actual oil rate - conditionally shown
+                # Actual oil rate (left Y-axis)
                 rx.cond(
                     GTMState.show_oil,
                     rx.recharts.line(
@@ -110,10 +116,11 @@ def production_rate_chart() -> rx.Component:
                         type_="monotone",
                         connect_nulls=True,
                         stroke_width=2,
+                        y_axis_id="left",
                     ),
                     rx.fragment(),
                 ),
-                # Actual liquid rate - conditionally shown
+                # Actual liquid rate (left Y-axis)
                 rx.cond(
                     GTMState.show_liquid,
                     rx.recharts.line(
@@ -124,10 +131,11 @@ def production_rate_chart() -> rx.Component:
                         type_="monotone",
                         connect_nulls=True,
                         stroke_width=2,
+                        y_axis_id="left",
                     ),
                     rx.fragment(),
                 ),
-                # Forecast oil rate - conditionally shown
+                # Forecast oil rate (left Y-axis)
                 rx.cond(
                     GTMState.show_oil,
                     rx.recharts.line(
@@ -139,10 +147,11 @@ def production_rate_chart() -> rx.Component:
                         type_="monotone",
                         connect_nulls=True,
                         stroke_width=2,
+                        y_axis_id="left",
                     ),
                     rx.fragment(),
                 ),
-                # Forecast liquid rate - conditionally shown
+                # Forecast liquid rate (left Y-axis)
                 rx.cond(
                     GTMState.show_liquid,
                     rx.recharts.line(
@@ -154,26 +163,80 @@ def production_rate_chart() -> rx.Component:
                         type_="monotone",
                         connect_nulls=True,
                         stroke_width=2,
+                        y_axis_id="left",
+                    ),
+                    rx.fragment(),
+                ),
+                # Water Cut actual (right Y-axis)
+                rx.cond(
+                    GTMState.show_wc,
+                    rx.recharts.line(
+                        data_key="wc",
+                        name="Water Cut (%)",
+                        stroke=rx.color("red", 9),
+                        dot=True,
+                        type_="monotone",
+                        connect_nulls=True,
+                        stroke_width=2,
+                        y_axis_id="right",
+                    ),
+                    rx.fragment(),
+                ),
+                # Water Cut forecast (right Y-axis)
+                rx.cond(
+                    GTMState.show_wc,
+                    rx.recharts.line(
+                        data_key="wcForecast",
+                        name="Water Cut Forecast (%)",
+                        stroke=rx.color("red", 10),
+                        stroke_dasharray="5 5",
+                        dot=False,
+                        type_="monotone",
+                        connect_nulls=True,
+                        stroke_width=2,
+                        y_axis_id="right",
                     ),
                     rx.fragment(),
                 ),
                 # Intervention vertical line
                 rx.recharts.reference_line(
                     x=GTMState.intervention_date,
-                    stroke=rx.color("red", 9),
+                    stroke=rx.color("orange", 9),
                     stroke_dasharray="3 3",
                     label="GTM",
                     stroke_width=2,
                 ),
-                rx.recharts.x_axis(data_key="date", angle=-45, text_anchor="end", height=80,tick={"fontSize":12}),
-                rx.recharts.y_axis(label={"value": "Rate (t/day)", "angle": -90, "position": "Center", "offset":30},tick={"fontSize":12}),
+                rx.recharts.x_axis(
+                    data_key="date",
+                    angle=-45,
+                    text_anchor="end",
+                    height=80,
+                    tick={"fontSize": 11}
+                ),
+                # Left Y-axis for Rate
+                rx.recharts.y_axis(
+                    y_axis_id="left",
+                    orientation="left",
+                    label={"value": "Rate (t/day)", "angle": -90, "position": "insideLeft", "offset": 10},
+                    tick={"fontSize": 11},
+                    stroke=rx.color("gray", 9),
+                ),
+                # Right Y-axis for Water Cut
+                rx.recharts.y_axis(
+                    y_axis_id="right",
+                    orientation="right",
+                    label={"value": "Water Cut (%)", "angle": 90, "position": "insideRight", "offset": 10},
+                    tick={"fontSize": 11},
+                    domain=[0, 100],
+                    stroke=rx.color("red", 9),
+                ),
                 rx.recharts.cartesian_grid(stroke_dasharray="3 3"),
                 rx.recharts.graphing_tooltip(),
                 rx.recharts.legend(),
                 data=GTMState.chart_data,
                 width="100%",
                 height=350,
-                margin={"bottom": 10, "left": 20, "right": 20, "top": 10},
+                margin={"bottom": 10, "left": 20, "right": 60, "top": 10},
             ),
             # Legend
             rx.hstack(
@@ -195,6 +258,14 @@ def production_rate_chart() -> rx.Component:
                 ),
                 rx.badge(
                     rx.hstack(
+                        rx.box(width="12px", height="3px", bg=rx.color("red", 9)),
+                        rx.text("Water Cut (%)", size="1"),
+                        spacing="1",
+                    ),
+                    variant="soft",
+                ),
+                rx.badge(
+                    rx.hstack(
                         rx.box(
                             width="12px", 
                             height="3px", 
@@ -208,7 +279,7 @@ def production_rate_chart() -> rx.Component:
                 ),
                 rx.badge(
                     rx.hstack(
-                        rx.box(width="12px", height="3px", bg=rx.color("red", 9)),
+                        rx.box(width="12px", height="3px", bg=rx.color("orange", 9)),
                         rx.text("Intervention Date", size="1"),
                         spacing="1",
                     ),

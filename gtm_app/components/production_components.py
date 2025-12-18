@@ -1,249 +1,593 @@
-"""Components for Production monitoring page."""
+"""Components for Production monitoring page with DCA forecasting."""
 import reflex as rx
-from ..states.base_state import BaseState
+from ..states.production_state import ProductionState
+from ..models import CompletionID
 
 
-def connection_dialog() -> rx.Component:
-    """Dialog for configuring MSSQL Server connection parameters."""
-    return rx.dialog.root(
-        rx.dialog.trigger(
-            rx.button(
-                rx.icon("settings", size=16),
-                rx.text("Configure Connection", size="2"),
-                variant="soft",
-                size="2",
-            ),
-        ),
-        rx.dialog.content(
-            rx.dialog.title("Database Connection Settings"),
-            rx.dialog.description("Configure MSSQL Server connection parameters"),
-            rx.form(
-                rx.vstack(
-                    rx.flex(
-                        rx.text("Server:", size="2", weight="bold"),
-                        rx.input(
-                            placeholder="localhost,1433",
-                            name="server",
-                            default_value=BaseState.server,
-                            width="100%",
-                        ),
-                        direction="column",
-                        spacing="1",
-                        width="100%",
-                    ),
-                    rx.flex(
-                        rx.text("Database:", size="2", weight="bold"),
-                        rx.input(
-                            placeholder="OFM",
-                            name="database",
-                            default_value=BaseState.database,
-                            width="100%",
-                        ),
-                        direction="column",
-                        spacing="1",
-                        width="100%",
-                    ),
-                    rx.flex(
-                        rx.text("Username:", size="2", weight="bold"),
-                        rx.input(
-                            placeholder="SA",
-                            name="username",
-                            default_value=BaseState.username,
-                            width="100%",
-                        ),
-                        direction="column",
-                        spacing="1",
-                        width="100%",
-                    ),
-                    rx.flex(
-                        rx.text("Password:", size="2", weight="bold"),
-                        rx.input(
-                            placeholder="Password",
-                            name="password",
-                            type="password",
-                            default_value=BaseState.password,
-                            width="100%",
-                        ),
-                        direction="column",
-                        spacing="1",
-                        width="100%",
-                    ),
-                    rx.flex(
-                        rx.dialog.close(
-                            rx.button("Cancel", variant="soft", color_scheme="gray"),
-                        ),
-                        rx.dialog.close(
-                            rx.button("Save", type="submit"),
-                        ),
-                        spacing="3",
-                        justify="end",
-                        width="100%",
-                    ),
-                    spacing="3",
-                    width="100%",
-                ),
-                on_submit=BaseState.update_connection_params,
-                reset_on_submit=False,
-            ),
-            max_width="450px",
-        ),
-    )
-
-
-def filter_controls() -> rx.Component:
-    """Filter controls for Master table."""
+def completion_filter_controls() -> rx.Component:
+    """Filter controls for CompletionID table."""
     return rx.hstack(
         rx.input(
             rx.input.slot(rx.icon("search")),
             placeholder="Search by ID or Well name...",
             size="2",
-            width="250px",
-            on_change=BaseState.filter_master_data,
+            width="220px",
+            on_change=ProductionState.filter_completions,
+            debounce_timeout=300,  # 300ms debounce to prevent lag
         ),
         rx.select(
-            BaseState.platform_filter_options,
-            placeholder="Filter by Platform",
+            ProductionState.unique_reservoirs,
+            placeholder="Filter by Reservoir",
             size="2",
             width="180px",
-            on_change=BaseState.filter_by_platform,
-        ),
-        rx.button(
-            rx.icon("x", size=16),
-            "Clear Filters",
-            variant="soft",
-            size="2",
-            on_click=BaseState.clear_filters,
+            on_change=ProductionState.filter_by_reservoir,
         ),
         spacing="2",
         align="center",
     )
 
 
-def show_master_row(well: dict) -> rx.Component:
-    """Display a Master table row."""
+def show_completion_row(completion: CompletionID) -> rx.Component:
+    """Display a completion in a table row."""
     return rx.table.row(
         rx.table.cell(
-            rx.text(well["UniqueId"], size="2", weight="medium"),
+            rx.text(completion.UniqueId, size="1", weight="medium"),
         ),
         rx.table.cell(
-            rx.text(well.get("Wellname", "-"), size="2"),
+            rx.text(
+                rx.cond(completion.WellName, completion.WellName, "-"),
+                size="1"
+            )
         ),
         rx.table.cell(
-            rx.badge(well.get("Platform", "-"), size="1", color_scheme="blue"),
+            rx.badge(
+                rx.cond(completion.Reservoir, completion.Reservoir, "-"),
+                color_scheme="blue",
+                size="1"
+            ),
         ),
         rx.table.cell(
-            rx.text(f"{well.get('X_top', 0):.2f}", size="2"),
+            rx.text(
+                rx.cond(completion.Completion, completion.Completion, "-"),
+                size="1"
+            )
         ),
         rx.table.cell(
-            rx.text(f"{well.get('Y_top', 0):.2f}", size="2"),
+            rx.text(
+                rx.cond(
+                    completion.KH,
+                    completion.KH.to(str),
+                    "-"
+                ),
+                size="1"
+            )
         ),
         rx.table.cell(
-            rx.text(f"{well.get('X_bot', 0):.2f}", size="2"),
+            rx.badge(
+                rx.cond(
+                    completion.Do,
+                    completion.Do.to(str),
+                    "-"
+                ),
+                color_scheme="orange",
+                size="1"
+            ),
         ),
-        rx.table.cell(
-            rx.text(f"{well.get('Y_bot', 0):.2f}", size="2"),
-        ),
-        style={"_hover": {"bg": rx.color("gray", 3)}},
+        style={"_hover": {"bg": rx.color("gray", 3)}, "cursor": "pointer"},
         align="center",
+        on_click=lambda: ProductionState.set_selected_unique_id(completion.UniqueId),
     )
 
 
-def master_table() -> rx.Component:
-    """Main Master table component."""
+def completion_table() -> rx.Component:
+    """Main CompletionID table component."""
     return rx.box(
         rx.table.root(
             rx.table.header(
                 rx.table.row(
-                    rx.table.column_header_cell(
-                        rx.text("Unique ID", size="2", weight="bold")
-                    ),
-                    rx.table.column_header_cell(
-                        rx.text("Well Name", size="2", weight="bold")
-                    ),
-                    rx.table.column_header_cell(
-                        rx.text("Platform", size="2", weight="bold")
-                    ),
-                    rx.table.column_header_cell(
-                        rx.text("X Top", size="2", weight="bold")
-                    ),
-                    rx.table.column_header_cell(
-                        rx.text("Y Top", size="2", weight="bold")
-                    ),
-                    rx.table.column_header_cell(
-                        rx.text("X Bottom", size="2", weight="bold")
-                    ),
-                    rx.table.column_header_cell(
-                        rx.text("Y Bottom", size="2", weight="bold")
-                    ),
+                    rx.table.column_header_cell(rx.text("Unique ID", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("Well Name", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("Reservoir", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("Completion", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("KH", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("Do (Di)", size="1", weight="bold")),
                 ),
             ),
             rx.table.body(
-                rx.foreach(BaseState.master_data, show_master_row),
+                rx.foreach(
+                    ProductionState.completions,
+                    show_completion_row
+                ),
             ),
             variant="surface",
-            size="2",
+            size="1",
             width="100%",
         ),
         overflow_x="auto",
         overflow_y="auto",
-        max_height="500px",
+        max_height="300px",
         width="100%",
     )
 
 
-def connection_status_badge() -> rx.Component:
-    """Display current database connection status."""
-    return rx.badge(
-        rx.icon("database", size=14),
-        BaseState.connection_status,
-        color_scheme=BaseState.connection_indicator_color,
-        size="2",
-    )
-
-
-def stats_summary() -> rx.Component:
-    """Summary statistics cards."""
+def completion_stats_summary() -> rx.Component:
+    """Summary statistics cards for completions."""
     return rx.grid(
         rx.card(
             rx.vstack(
                 rx.hstack(
-                    rx.icon("layers", size=20, color=rx.color("blue", 9)),
-                    rx.text("Total Wells", size="2", weight="bold"),
+                    rx.icon("layers", size=18, color=rx.color("blue", 9)),
+                    rx.text("Total Completions", size="1", weight="bold"),
                     spacing="2",
                 ),
-                rx.heading(BaseState.total_wells, size="6"),
-                spacing="2",
+                rx.heading(ProductionState.total_completions, size="5"),
+                spacing="1",
                 align="start",
             ),
-            padding="1.5em",
+            padding="1em",
         ),
         rx.card(
             rx.vstack(
                 rx.hstack(
-                    rx.icon("building", size=20, color=rx.color("green", 9)),
-                    rx.text("Platforms", size="2", weight="bold"),
+                    rx.icon("database", size=18, color=rx.color("green", 9)),
+                    rx.text("History Records", size="1", weight="bold"),
                     spacing="2",
                 ),
-                rx.heading(BaseState.unique_platforms, size="6"),
-                spacing="2",
+                rx.heading(ProductionState.history_record_count, size="5"),
+                spacing="1",
                 align="start",
             ),
-            padding="1.5em",
+            padding="1em",
         ),
         rx.card(
             rx.vstack(
                 rx.hstack(
-                    rx.icon("activity", size=20, color=rx.color("orange", 9)),
-                    rx.text("Connection", size="2", weight="bold"),
+                    rx.icon("calendar", size=18, color=rx.color("orange", 9)),
+                    rx.text("Date Range (5Y)", size="1", weight="bold"),
                     spacing="2",
                 ),
-                connection_status_badge(),
-                spacing="2",
+                rx.text(ProductionState.date_range_display, size="2"),
+                spacing="1",
                 align="start",
             ),
-            padding="1.5em",
+            padding="1em",
         ),
         columns="3",
-        spacing="4",
+        spacing="3",
+        width="100%",
+    )
+
+
+def selected_completion_info() -> rx.Component:
+    """Display selected completion info with DCA parameters."""
+    return rx.cond(
+        ProductionState.selected_unique_id != "",
+        rx.card(
+            rx.vstack(
+                rx.hstack(
+                    rx.vstack(
+                        rx.text("Selected:", size="1", color=rx.color("gray", 10)),
+                        rx.text(ProductionState.selected_unique_id, weight="bold", size="2"),
+                        spacing="0",
+                    ),
+                    rx.divider(orientation="vertical", size="2"),
+                    rx.vstack(
+                        rx.text("Well:", size="1", color=rx.color("gray", 10)),
+                        rx.text(ProductionState.selected_wellname, size="1"),
+                        spacing="0",
+                    ),
+                    rx.divider(orientation="vertical", size="2"),
+                    rx.vstack(
+                        rx.text("Reservoir:", size="1", color=rx.color("gray", 10)),
+                        rx.badge(
+                            ProductionState.selected_reservoir_name,
+                            color_scheme="blue",
+                            size="1"
+                        ),
+                        spacing="0",
+                    ),
+                    rx.divider(orientation="vertical", size="2"),
+                    rx.badge(
+                        rx.vstack(
+                            rx.text("DCA Params:", size="1", color=rx.color("gray", 10)),
+                            rx.text(ProductionState.dca_parameters_display, size="1"),
+                            spacing="0",
+                        ),
+                        color_scheme="green",
+                    ),
+                    rx.divider(orientation="vertical", size="2"),
+                    forecast_version_selector(),
+                    rx.cond(
+                        ProductionState.current_forecast_version > 0,
+                        rx.button(
+                            rx.icon("trash-2", size=12),
+                            rx.text("Delete", size="1"),
+                            variant="ghost",
+                            color_scheme="red",
+                            size="1",
+                            on_click=ProductionState.delete_current_forecast_version,
+                        ),
+                        rx.fragment(),
+                    ),
+                    spacing="3",
+                    padding="0.5em",
+                    background=rx.color("gray", 2),
+                    border_radius="6px",
+                    width="100%",
+                    align="center",
+                ),
+                # Intervention warning if planned
+                rx.cond(
+                    ProductionState.has_planned_intervention,
+                    rx.hstack(
+                        rx.icon("alert-triangle", size=14, color=rx.color("yellow", 9)),
+                        rx.text(
+                            ProductionState.intervention_info,
+                            size="1",
+                            color=rx.color("yellow", 11)
+                        ),
+                        rx.badge("Will save to InterventionProd v0", color_scheme="yellow", size="1"),
+                        spacing="2",
+                        padding="0.5em",
+                        background=rx.color("yellow", 3),
+                        border_radius="4px",
+                    ),
+                    rx.fragment(),
+                ),
+                spacing="2",
+                width="100%",
+            ),
+            padding="0.75em",
+        ),
+        rx.text("Select a completion from the table", color=rx.color("gray", 10), size="2"),
+    )
+
+
+def forecast_controls() -> rx.Component:
+    """Forecast control panel with UniqueId selector, date input, and run button."""
+    return rx.hstack(
+        rx.vstack(
+            rx.text("Unique ID:", size="1", weight="bold"),
+            rx.select(
+                ProductionState.available_unique_ids,
+                value=ProductionState.selected_unique_id,
+                on_change=ProductionState.set_selected_unique_id,
+                size="1",
+                width="150px",
+            ),
+            spacing="1",
+        ),
+        rx.vstack(
+            rx.text("Forecast End Date:", size="1", weight="bold"),
+            rx.input(
+                type="date",
+                on_change=ProductionState.set_forecast_end_date,
+                width="150px",
+                size="1",
+            ),
+            spacing="1",
+        ),
+        rx.button(
+            rx.icon("trending-up", size=16),
+            rx.text("Run DCA Forecast", size="2"),
+            on_click=ProductionState.run_forecast,
+            size="2",
+        ),
+        spacing="3",
+        align="end",
+    )
+
+
+def forecast_version_selector() -> rx.Component:
+    """Selector for viewing different forecast versions."""
+    return rx.cond(
+        ProductionState.available_forecast_versions.length() > 0,
+        rx.hstack(
+            rx.text("Version:", size="1", weight="bold"),
+            rx.select(
+                ProductionState.forecast_version_options,
+                value=ProductionState.current_version_display,
+                on_change=ProductionState.set_forecast_version_from_str,
+                size="1",
+                width="70px",
+            ),
+            rx.badge(
+                ProductionState.version_count_display,
+                color_scheme="gray",
+                size="1",
+            ),
+            spacing="2",
+            align="center",
+        ),
+        rx.text("No forecasts", size="1", color=rx.color("gray", 9)),
+    )
+
+
+def production_history_table() -> rx.Component:
+    """Table showing production history from HistoryProd (last 24 records)."""
+    return rx.box(
+        rx.table.root(
+            rx.table.header(
+                rx.table.row(
+                    rx.table.column_header_cell(rx.text("Date", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("Oil Rate", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("Liq Rate", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("WC %", size="1", weight="bold")),
+                ),
+            ),
+            rx.table.body(
+                rx.foreach(
+                    ProductionState.production_table_data,
+                    lambda row: rx.table.row(
+                        rx.table.cell(rx.text(row["Date"], size="1")),
+                        rx.table.cell(rx.text(row["OilRate"], size="1")),
+                        rx.table.cell(rx.text(row["LiqRate"], size="1")),
+                        rx.table.cell(
+                            rx.badge(
+                                row["WC"],
+                                color_scheme=rx.cond(
+                                    row["WC_val"].to(float) > 80,
+                                    "red",
+                                    rx.cond(
+                                        row["WC_val"].to(float) > 50,
+                                        "yellow",
+                                        "green"
+                                    )
+                                ),
+                                size="1"
+                            )
+                        ),
+                        style={"_hover": {"bg": rx.color("gray", 3)}},
+                    )
+                ),
+            ),
+            variant="surface",
+            size="1",
+            width="100%",
+        ),
+        overflow_y="auto",
+        max_height="250px",
+        width="100%",
+    )
+
+
+def forecast_result_table() -> rx.Component:
+    """Table showing forecast results."""
+    return rx.box(
+        rx.table.root(
+            rx.table.header(
+                rx.table.row(
+                    rx.table.column_header_cell(rx.text("Date", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("Oil Rate", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("Liq Rate", size="1", weight="bold")),
+                ),
+            ),
+            rx.table.body(
+                rx.foreach(
+                    ProductionState.forecast_table_data,
+                    lambda row: rx.table.row(
+                        rx.table.cell(rx.text(row["Date"], size="1")),
+                        rx.table.cell(rx.text(row["OilRate"], size="1")),
+                        rx.table.cell(rx.text(row["LiqRate"], size="1")),
+                        style={"_hover": {"bg": rx.color("blue", 2)}},
+                    )
+                ),
+            ),
+            variant="surface",
+            size="1",
+            width="100%",
+        ),
+        overflow_y="auto",
+        max_height="250px",
+        width="100%",
+    )
+
+
+def production_rate_chart() -> rx.Component:
+    """Line chart showing production rate vs time with DCA forecast and Water Cut on secondary axis."""
+    return rx.card(
+        rx.vstack(
+            rx.hstack(
+                rx.heading("Production Rate vs Time (Exponential DCA)", size="4"),
+                rx.spacer(),
+                rx.hstack(
+                    rx.text("Show:", size="2", weight="bold"),
+                    rx.checkbox(
+                        "Oil",
+                        checked=ProductionState.show_oil,
+                        on_change=ProductionState.toggle_oil,
+                        color_scheme="green",
+                    ),
+                    rx.checkbox(
+                        "Liquid",
+                        checked=ProductionState.show_liquid,
+                        on_change=ProductionState.toggle_liquid,
+                        color_scheme="blue",
+                    ),
+                    rx.checkbox(
+                        "Water Cut",
+                        checked=ProductionState.show_wc,
+                        on_change=ProductionState.toggle_wc,
+                        color_scheme="red",
+                    ),
+                    spacing="3",
+                    align="center",
+                ),
+                width="100%",
+                align="center",
+            ),
+            rx.recharts.composed_chart(
+                # Actual oil rate (left Y-axis)
+                rx.cond(
+                    ProductionState.show_oil,
+                    rx.recharts.line(
+                        data_key="oilRate",
+                        name="Oil Rate (Actual)",
+                        stroke=rx.color("green", 9),
+                        dot=True,
+                        type_="monotone",
+                        connect_nulls=True,
+                        stroke_width=2,
+                        y_axis_id="left",
+                    ),
+                    rx.fragment(),
+                ),
+                # Actual liquid rate (left Y-axis)
+                rx.cond(
+                    ProductionState.show_liquid,
+                    rx.recharts.line(
+                        data_key="liqRate",
+                        name="Liq Rate (Actual)",
+                        stroke=rx.color("blue", 9),
+                        dot=True,
+                        type_="monotone",
+                        connect_nulls=True,
+                        stroke_width=2,
+                        y_axis_id="left",
+                    ),
+                    rx.fragment(),
+                ),
+                # Forecast oil rate (left Y-axis)
+                rx.cond(
+                    ProductionState.show_oil,
+                    rx.recharts.line(
+                        data_key="oilRateForecast",
+                        name="Oil Rate (Forecast)",
+                        stroke=rx.color("green", 10),
+                        stroke_dasharray="5 5",
+                        dot=False,
+                        type_="monotone",
+                        connect_nulls=True,
+                        stroke_width=2,
+                        y_axis_id="left",
+                    ),
+                    rx.fragment(),
+                ),
+                # Forecast liquid rate (left Y-axis)
+                rx.cond(
+                    ProductionState.show_liquid,
+                    rx.recharts.line(
+                        data_key="liqRateForecast",
+                        name="Liq Rate (Forecast)",
+                        stroke=rx.color("blue", 10),
+                        stroke_dasharray="5 5",
+                        dot=False,
+                        type_="monotone",
+                        connect_nulls=True,
+                        stroke_width=2,
+                        y_axis_id="left",
+                    ),
+                    rx.fragment(),
+                ),
+                # Water Cut (right Y-axis)
+                rx.cond(
+                    ProductionState.show_wc,
+                    rx.recharts.line(
+                        data_key="wc",
+                        name="Water Cut (%)",
+                        stroke=rx.color("red", 9),
+                        dot=True,
+                        type_="monotone",
+                        connect_nulls=True,
+                        stroke_width=2,
+                        y_axis_id="right",
+                    ),
+                    rx.fragment(),
+                ),
+                # Forecast Water Cut (right Y-axis)
+                rx.cond(
+                    ProductionState.show_wc,
+                    rx.recharts.line(
+                        data_key="wcForecast",
+                        name="Water Cut Forecast (%)",
+                        stroke=rx.color("red", 10),
+                        stroke_dasharray="5 5",
+                        dot=False,
+                        type_="monotone",
+                        connect_nulls=True,
+                        stroke_width=2,
+                        y_axis_id="right",
+                    ),
+                    rx.fragment(),
+                ),
+                rx.recharts.x_axis(
+                    data_key="date",
+                    angle=-45,
+                    text_anchor="end",
+                    height=80,
+                    tick={"fontSize": 11}
+                ),
+                # Left Y-axis for Rate
+                rx.recharts.y_axis(
+                    y_axis_id="left",
+                    orientation="left",
+                    label={"value": "Rate (t/day)", "angle": -90, "position": "insideLeft", "offset": 10},
+                    tick={"fontSize": 11},
+                    stroke=rx.color("gray", 9),
+                ),
+                # Right Y-axis for Water Cut
+                rx.recharts.y_axis(
+                    y_axis_id="right",
+                    orientation="right",
+                    label={"value": "Water Cut (%)", "angle": 90, "position": "insideRight", "offset": 10},
+                    tick={"fontSize": 11},
+                    domain=[0, 100],
+                    stroke=rx.color("red", 9),
+                ),
+                rx.recharts.cartesian_grid(stroke_dasharray="3 3"),
+                rx.recharts.graphing_tooltip(),
+                rx.recharts.legend(),
+                data=ProductionState.chart_data,
+                width="100%",
+                height=350,
+                margin={"bottom": 10, "left": 20, "right": 60, "top": 10},
+            ),
+            # Legend
+            rx.hstack(
+                rx.badge(
+                    rx.hstack(
+                        rx.box(width="12px", height="3px", bg=rx.color("green", 9)),
+                        rx.text("Oil (Actual)", size="1"),
+                        spacing="1",
+                    ),
+                    variant="soft",
+                ),
+                rx.badge(
+                    rx.hstack(
+                        rx.box(width="12px", height="3px", bg=rx.color("blue", 9)),
+                        rx.text("Liquid (Actual)", size="1"),
+                        spacing="1",
+                    ),
+                    variant="soft",
+                ),
+                rx.badge(
+                    rx.hstack(
+                        rx.box(width="12px", height="3px", bg=rx.color("red", 9)),
+                        rx.text("Water Cut (%)", size="1"),
+                        spacing="1",
+                    ),
+                    variant="soft",
+                ),
+                rx.badge(
+                    rx.hstack(
+                        rx.box(
+                            width="12px",
+                            height="3px",
+                            bg=rx.color("gray", 6),
+                            style={"border_top": "2px dashed"}
+                        ),
+                        rx.text("Forecast", size="1"),
+                        spacing="1",
+                    ),
+                    variant="soft",
+                ),
+                spacing="2",
+                justify="center",
+            ),
+            width="100%",
+            align="center",
+            spacing="3",
+        ),
+        padding="1em",
         width="100%",
     )

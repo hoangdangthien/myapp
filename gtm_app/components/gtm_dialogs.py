@@ -74,6 +74,12 @@ def add_gtm_button() -> rx.Component:
                         spacing="2",
                         width="100%",
                     ),
+                    rx.grid(
+                        form_field("Describe intervention","Describe detail intervention activity","text",""),
+                        columns="3",
+                        spacing="2",
+                        width="100%",
+                    ),
                     rx.flex(
                         rx.dialog.close(
                             rx.button("Cancel", variant="soft", color_scheme="gray"),
@@ -199,6 +205,13 @@ def update_gtm_dialog(gtm: Intervention) -> rx.Component:
                         form_field("Initial Liq Rate", "0", "number", "InitialLRate", gtm.InitialLRate.to(str)),#use to str is working not use str(gtm.InitialLRate)
                         form_field("b (liquid)", "0", "number", "bl", gtm.bl.to(str)),
                         form_field("Di (liquid)", "0", "number", "Dil", gtm.Dil.to(str)),
+                        columns="3",
+                        spacing="2",
+                        width="100%",
+                    ),
+                    rx.text("Describe detail intervention activity"),
+                    rx.grid(
+                        form_field("Describe intervention","Describe detail intervention activity","text",gtm.Describe.to(str)),
                         columns="3",
                         spacing="2",
                         width="100%",
