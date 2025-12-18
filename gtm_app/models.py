@@ -26,7 +26,7 @@ class Intervention(rx.Model, table=True):
     Describe : str       # Describe Intervention activity
 
 
-class InterventionProd(rx.Model, table=True):
+class InterventionForecast(rx.Model, table=True):
     """The intervention production information - stores production history and forecasts.
     
     Version field:
@@ -37,37 +37,40 @@ class InterventionProd(rx.Model, table=True):
         - "Actual": Real production measurements
         - "Forecast": Predicted values from Arps decline model
     """
-    __tablename__ = "InterventionProd"
+    __tablename__ = "InterventionForecast"
     
     UniqueId: str = sqlmodel.Field(primary_key=True, max_length=255)
     Date: datetime = sqlmodel.Field(primary_key=True)
     Version: int = sqlmodel.Field(default=0, primary_key=True)
     DataType: str = sqlmodel.Field(default="Forecast")
-    OilRate: float      # Oil production rate (bbl/day)
-    OilProd: float      # Cumulative oil production (bbl)
-    LiqRate: float      # Liquid production rate (bbl/day)
-    LiqProd: float      # Cumulative liquid production (bbl)
-    WC: float           # Water cut (%)
+    OilRate: float      # Oil production rate (ton/day)
+    LiqRate: float      # Liquid production rate (ton/day)
+    Qoil: float      # Cumulative oil production in month (ton) : OilProd = K_int*Dayon*OilRate
+    Qliq: float      # Cumulative liquid production in month (ton): LiqProd = K_int*Dayon*LiqRate
+    WC: float           # Water cut (%) = (Qliq-Qoil)/Qliq*100
     CreatedAt: datetime = sqlmodel.Field(default_factory=datetime.now)
 
 
 class CompletionID(rx.Model, table=True):
     __tablename__ = "CompletionID"
     UniqueId: str = sqlmodel.Field(primary_key=True, max_length=255)
-    Wellname: str 
+    WellName: str 
     X_top: float
     Y_top: float
+    Z_top :float
     X_bot: float
     Y_bot: float
+    Z_bot : float
     Reservoir : str
     Completion: str
-    kh : float
-    Decline : float  # Di for Exponential DCA
+    KH : float
+    Do : float  # Di for Exponential DCA for oil phase
+    Dl : float # Di for Exponential DCA for liquid phase
 
 
 class WellID(rx.Model,table=True):
     __tablename__ = "WellID"
-    Wellname : str = sqlmodel.Field(primary_key=True,max_length=255)
+    WellName : str = sqlmodel.Field(primary_key=True,max_length=255)
     X_coord : float
     Y_coord : float
     Platform : str
@@ -91,9 +94,9 @@ class HistoryProd(rx.Model, table=True):
     GOR: float
     ChokeSize: float
     Press_WH: float
-    Oilrate: float
-    Liqrate: float
-    Gasrate: float
+    OilRate: float
+    LiqRate: float
+    GasRate: float
     Note: str
 
 
@@ -107,19 +110,21 @@ class ProductionForecast(rx.Model, table=True):
     UniqueId: str = sqlmodel.Field(primary_key=True, max_length=255)
     Date: datetime = sqlmodel.Field(primary_key=True)
     Version: int = sqlmodel.Field(default=1, primary_key=True)
-    Oilrate: float
-    Liqrate: float
-    Qoil: float       # Cumulative oil
-    Qliq: float       # Cumulative liquid
-    WC: float
+    OilRate: float
+    LiqRate: float
+    Qoil: float         # Cumulative oil in month Qoil = K_oil*Dayon*Oilrate
+    Qliq: float         # Cumulative liquid in month Qliq = K_liq*Dayon*Liqrate
+    WC: float           # WC = (Qliq-Qoil)/Qoil*100
     CreatedAt: datetime = sqlmodel.Field(default_factory=datetime.now)
 
 
 class KMonth(rx.Model, table=True):
     __tablename__ = "KMonth"
     MonthID: int = sqlmodel.Field(primary_key=True)
-    K_oil: float
-    K_liq: float
+    K_oil: float        #uptime for oil phase
+    K_liq: float        #uptime for liquid phase
+    K_int : float       #uptime for intervention
+    K_inj : float       #uptime for injection
 
 
 # Field options for dropdown selections
