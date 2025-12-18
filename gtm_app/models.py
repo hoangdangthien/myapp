@@ -42,6 +42,7 @@ class InterventionProd(rx.Model, table=True):
     UniqueId: str = sqlmodel.Field(primary_key=True, max_length=255)
     Date: datetime = sqlmodel.Field(primary_key=True)
     Version: int = sqlmodel.Field(default=0, primary_key=True)
+    DataType: str = sqlmodel.Field(default="Forecast")
     OilRate: float      # Oil production rate (bbl/day)
     OilProd: float      # Cumulative oil production (bbl)
     LiqRate: float      # Liquid production rate (bbl/day)
@@ -61,7 +62,8 @@ class CompletionID(rx.Model, table=True):
     Reservoir : str
     Completion: str
     kh : float
-    Decline : float
+    Decline : float  # Di for Exponential DCA
+
 
 class WellID(rx.Model,table=True):
     __tablename__ = "WellID"
@@ -75,6 +77,7 @@ class WellID(rx.Model,table=True):
     VSPShare : float
     WellCategory : str      #OIL,GAS,COND,INJ
     WellStatus : str        #Working, Abandone        
+
 
 class HistoryProd(rx.Model, table=True):
     __tablename__ = "HistoryProd"
@@ -92,23 +95,32 @@ class HistoryProd(rx.Model, table=True):
     Liqrate: float
     Gasrate: float
     Note: str
-class ProductionForecast(rx.Model,table=True):
+
+
+class ProductionForecast(rx.Model, table=True):
+    """Production forecast table for storing DCA forecasts.
+    
+    Version field:
+        - 1, 2, 3, 4: Forecast versions (FIFO - max 4 versions kept)
+    """
     __tablename__ = "ProductionForecast"
-    UniqueId:str = sqlmodel.Field(primary_key=True,max_length=255)
-    Date : datetime = sqlmodel.Field(primary_key=True)
-    Version: int = sqlmodel.Field(default=0, primary_key=True)
-    Oilrate : float
-    Liqrate : float
-    Qoil : float
-    Qliq : float
-    WC : float
+    UniqueId: str = sqlmodel.Field(primary_key=True, max_length=255)
+    Date: datetime = sqlmodel.Field(primary_key=True)
+    Version: int = sqlmodel.Field(default=1, primary_key=True)
+    Oilrate: float
+    Liqrate: float
+    Qoil: float       # Cumulative oil
+    Qliq: float       # Cumulative liquid
+    WC: float
     CreatedAt: datetime = sqlmodel.Field(default_factory=datetime.now)
 
-class KMonth(rx.Model,table=True):
+
+class KMonth(rx.Model, table=True):
     __tablename__ = "KMonth"
-    MonthID : int 
-    K_oil : float
-    K_liq : float
+    MonthID: int = sqlmodel.Field(primary_key=True)
+    K_oil: float
+    K_liq: float
+
 
 # Field options for dropdown selections
 FIELD_OPTIONS = [
@@ -136,27 +148,26 @@ RESERVOIR_OPTIONS = [
 
 # GTM Type options - English well intervention types
 GTM_TYPE_OPTIONS = [
-    "Infill well",           # ВНС - Ввод новой скважины
-    "Hydraulic Fracturing",      # ГРП - Гидроразрыв пласта
-    "Perforation",               # ПВЛГ - Перфорация
-    "ESP Installation",          # УЭЦН - Установка ЭЦН
-    "Sidetrack",                 # ЗБС - Зарезка бокового ствола
-    "Workover",                  # РИР - Ремонтно-изоляционные работы
-    "Stimulation",               # ОПЗ - Обработка призабойной зоны
-    "Perforation Through Tubing", # ПВР (через НКТ)
-    "Routine Maintenance",       # TPO - Текущий подземный ремонт
-    "Equipment Change",          # Смена ВСО
-    "Injection to Production",   # Перевод в добычу из ППД
-    "Bottomhole Normalization",  # Нормализация забоя
-    "Acidizing",                 # Кислотная обработка
-    "Sand Control",              # Противопесочные мероприятия
+    "Infill well",
+    "Hydraulic Fracturing",
+    "Perforation",
+    "ESP Installation",
+    "Sidetrack",
+    "Workover",
+    "Stimulation",
+    "Perforation Through Tubing",
+    "Routine Maintenance",
+    "Equipment Change",
+    "Injection to Production",
+    "Bottomhole Normalization",
+    "Acidizing",
+    "Sand Control",
 ]
 
 # Status options
 STATUS_OPTIONS = ["Plan", "Done", "Cancelled"]
 
-
-# Mapping between Russian and English GTM types (for migration/reference)
+# GTM Type mapping for reference
 GTM_TYPE_MAPPING = {
     "ВНС": "Well Completion",
     "ГРП": "Hydraulic Fracturing",
@@ -173,3 +184,4 @@ GTM_TYPE_MAPPING = {
 }
 
 MAX_FORECAST_VERSIONS = 3
+MAX_PRODUCTION_FORECAST_VERSIONS = 4  # For ProductionForecast table
