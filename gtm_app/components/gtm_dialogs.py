@@ -6,6 +6,7 @@ from ..models import (
     PLATFORM_OPTIONS, 
     RESERVOIR_OPTIONS,
     GTM_TYPE_OPTIONS,
+    GTM_CATEGORY_OPTIONS,
     STATUS_OPTIONS
 )
 from ..states.gtm_state import GTMState
@@ -50,9 +51,10 @@ def add_gtm_button() -> rx.Component:
                     ),
                     rx.grid(
                         select_field("Type GTM", GTM_TYPE_OPTIONS, "TypeGTM"),
+                        select_field("Category GTM", GTM_CATEGORY_OPTIONS, "TypeGTM"),
                         form_field("Planning Date", "", "date", "PlanningDate"),
                         select_field("Status", STATUS_OPTIONS, "Status"),
-                        columns="3",
+                        columns="2",
                         spacing="3",
                         width="100%",
                     ),
@@ -116,7 +118,7 @@ def load_excel_button() -> rx.Component:
             rx.dialog.title("Load Interventions from Excel"),
             rx.dialog.description(
                 "Upload an Excel file with intervention data. Required columns: "
-                "UniqueId, Field, Platform, Reservoir, TypeGTM, PlanningDate, Status, "
+                "UniqueId, Field, Platform, Reservoir, TypeGTM,CategoryGTM, PlanningDate, Status, "
                 "InitialORate, bo, Dio, InitialLRate, bl, Dil"
             ),
             rx.vstack(
@@ -179,15 +181,16 @@ def update_gtm_dialog(gtm: Intervention) -> rx.Component:
                         select_field("Field", FIELD_OPTIONS, "Field", gtm.Field),
                         select_field("Platform", PLATFORM_OPTIONS, "Platform", gtm.Platform),
                         select_field("Reservoir", RESERVOIR_OPTIONS, "Reservoir", gtm.Reservoir),
-                        columns="3",
+                        columns="2",
                         spacing="2",
                         width="100%",
                     ),
                     rx.grid(
                         select_field("Type GTM", GTM_TYPE_OPTIONS, "TypeGTM", gtm.TypeGTM),
+                        select_field("Category GTM", GTM_CATEGORY_OPTIONS, "CategoryGTM"),
                         form_field("Planning Date", "", "date", "PlanningDate", gtm.PlanningDate),
                         select_field("Status", STATUS_OPTIONS, "Status", gtm.Status),
-                        columns="3",
+                        columns="2",
                         spacing="2",
                         width="100%",
                     ),
