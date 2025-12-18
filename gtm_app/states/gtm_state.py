@@ -201,7 +201,7 @@ class GTMState(rx.State):
         try:
             with rx.session() as session:
                 forecast_records = session.exec(
-                    InterventionForecast.select().where(
+                    select(InterventionForecast).where(
                         InterventionForecast.UniqueId == self.selected_id,
                         InterventionForecast.Version == self.current_forecast_version
                     ).order_by(InterventionForecast.Date)
@@ -538,7 +538,7 @@ class GTMState(rx.State):
                 for _, row in df.iterrows():
                     # Check if exists
                     existing = session.exec(
-                        Intervention.select().where(
+                        select(Intervention).where(
                             Intervention.UniqueId == str(row['UniqueId'])
                         )
                     ).first()
@@ -550,6 +550,7 @@ class GTMState(rx.State):
                             Platform=str(row['Platform']),
                             Reservoir=str(row['Reservoir']),
                             TypeGTM=str(row['TypeGTM']),
+                            Category=str(row.get('Category', '')),
                             PlanningDate=str(row['PlanningDate'])[:10],
                             Status=str(row['Status']),
                             InitialORate=float(row['InitialORate']),
@@ -557,7 +558,8 @@ class GTMState(rx.State):
                             Dio=float(row['Dio']),
                             InitialLRate=float(row['InitialLRate']),
                             bl=float(row['bl']),
-                            Dil=float(row['Dil'])
+                            Dil=float(row['Dil']),
+                            Describe=str(row.get('Describe', ''))
                         )
                         session.add(new_gtm)
                         added_count += 1
@@ -593,9 +595,17 @@ class GTMState(rx.State):
             if not form_data.get("Status"):
                 form_data["Status"] = "Plan"
             
+            # Set default Category if not provided
+            if not form_data.get("Category"):
+                form_data["Category"] = ""
+            
+            # Set default Describe if not provided
+            if not form_data.get("Describe"):
+                form_data["Describe"] = ""
+            
             with rx.session() as session:
                 existing = session.exec(
-                    Intervention.select().where(
+                    select(Intervention).where(
                         Intervention.UniqueId == form_data["UniqueId"]
                     )
                 ).first()
@@ -625,61 +635,83 @@ class GTMState(rx.State):
         """Update existing GTM in database with partial update support.
         
         After updating, refreshes current_gtm to ensure forecast uses latest values.
+        
+        Key fixes:
+        1. Properly handles all string fields including Category and Describe
+        2. Uses proper SQLModel query syntax
+        3. Maintains data integrity by validating before update
         """
         try:
+            if not self.current_gtm:
+                return rx.toast.error("No intervention selected for update")
+            
+            unique_id = self.current_gtm.UniqueId
+            
             with rx.session() as session:
+                # Query the existing record
                 gtm_to_update = session.exec(
-                    Intervention.select().where(
-                        Intervention.UniqueId == self.current_gtm.UniqueId
+                    select(Intervention).where(
+                        Intervention.UniqueId == unique_id
                     )
                 ).first()
                 
-                if gtm_to_update:
-                    # Update string fields only if non-empty value provided
-                    string_fields = ["Field", "Platform", "Reservoir", "TypeGTM", "Category", "PlanningDate", "Status"]
-                    for field in string_fields:
-                        value = form_data.get(field)
-                        if value and str(value).strip():
-                            setattr(gtm_to_update, field, value)
-                    
-                    # Update numeric fields
-                    numeric_fields = [
-                        ("InitialORate", "InitialORate"),
-                        ("bo", "bo"),
-                        ("Dio", "Dio"),
-                        ("InitialLRate", "InitialLRate"),
-                        ("bl", "bl"),
-                        ("Dil", "Dil"),
-                    ]
-                    for form_key, model_field in numeric_fields:
-                        value = form_data.get(form_key)
-                        if value is not None and value != "":
-                            try:
-                                numeric_value = float(value)
-                                setattr(gtm_to_update, model_field, numeric_value)
-                            except (ValueError, TypeError):
-                                pass
-                    
-                    session.add(gtm_to_update)
-                    session.commit()
-                    
-                    # Refresh the session to get updated data
-                    session.refresh(gtm_to_update)
-                    
-                    # Update current_gtm with fresh data so forecast uses new values
-                    self.current_gtm = gtm_to_update
-                    
+                if not gtm_to_update:
+                    return rx.toast.error(f"Intervention '{unique_id}' not found in database")
+                
+                # Update string fields only if non-empty value provided
+                string_fields = [
+                    "Field", "Platform", "Reservoir", "TypeGTM", 
+                    "Category", "PlanningDate", "Status", "Describe"
+                ]
+                for field in string_fields:
+                    value = form_data.get(field)
+                    if value is not None and str(value).strip():
+                        setattr(gtm_to_update, field, str(value).strip())
+                
+                # Update numeric fields - handle empty strings and None values
+                numeric_fields = [
+                    ("InitialORate", "InitialORate"),
+                    ("bo", "bo"),
+                    ("Dio", "Dio"),
+                    ("InitialLRate", "InitialLRate"),
+                    ("bl", "bl"),
+                    ("Dil", "Dil"),
+                ]
+                
+                for form_key, model_field in numeric_fields:
+                    value = form_data.get(form_key)
+                    # Check if value exists and is not empty string
+                    if value is not None and str(value).strip() != "":
+                        try:
+                            numeric_value = float(value)
+                            setattr(gtm_to_update, model_field, numeric_value)
+                        except (ValueError, TypeError) as e:
+                            print(f"Warning: Could not convert {form_key}='{value}' to float: {e}")
+                            # Keep existing value if conversion fails
+                
+                # Add the updated object and commit
+                session.add(gtm_to_update)
+                session.commit()
+                
+                # Refresh to get the updated data from DB
+                session.refresh(gtm_to_update)
+                
+                # Update current_gtm with fresh data so forecast uses new values
+                self.current_gtm = gtm_to_update
+            
             # Reload GTM list to reflect changes in table
             self.load_gtms()
             
             # If this is the selected intervention, also update intervention_date
-            if self.selected_id == self.current_gtm.UniqueId:
+            if self.selected_id == unique_id:
                 self.intervention_date = self.current_gtm.PlanningDate
             
-            return rx.toast.success("GTM updated successfully!")
+            return rx.toast.success(f"Intervention '{unique_id}' updated successfully!")
             
         except Exception as e:
             print(f"Update error: {e}")
+            import traceback
+            traceback.print_exc()
             return rx.toast.error(f"Failed to update GTM: {str(e)}")
 
     def delete_gtm(self, unique_id: str):
@@ -687,7 +719,7 @@ class GTMState(rx.State):
         try:
             with rx.session() as session:
                 gtm_to_delete = session.exec(
-                    Intervention.select().where(
+                    select(Intervention).where(
                         Intervention.UniqueId == unique_id
                     )
                 ).first()

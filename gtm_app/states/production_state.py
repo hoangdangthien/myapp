@@ -160,7 +160,7 @@ class ProductionState(rx.State):
         # Load production data in background
         return ProductionState.load_production_data_background
 
-    @rx.event(background=True)
+    #@rx.event(background=True)
     async def load_production_data_background(self):
         """Load production data in background to prevent UI blocking."""
         async with self:
@@ -282,8 +282,8 @@ class ProductionState(rx.State):
                 self.forecast_data = [
                     {
                         "date": rec.Date.strftime("%Y-%m-%d") if isinstance(rec.Date, datetime) else str(rec.Date),
-                        "oilRate": rec.Oilrate,
-                        "liqRate": rec.Liqrate,
+                        "oilRate": rec.OilRate,
+                        "liqRate": rec.LiqRate,
                         "cumOil": rec.Qoil,
                         "cumLiq": rec.Qliq,
                         "wc": rec.WC
@@ -312,8 +312,8 @@ class ProductionState(rx.State):
                 self.forecast_data = [
                     {
                         "date": rec.Date.strftime("%Y-%m-%d") if isinstance(rec.Date, datetime) else str(rec.Date),
-                        "oilRate": rec.Oilrate,
-                        "liqRate": rec.Liqrate,
+                        "oilRate": rec.OilRate,
+                        "liqRate": rec.LiqRate,
                         "cumOil": rec.Qoil,
                         "cumLiq": rec.Qliq,
                         "wc": rec.WC
@@ -430,8 +430,8 @@ class ProductionState(rx.State):
                         UniqueId=unique_id,
                         Date=date,
                         Version=version,
-                        Oilrate=oil_rate,
-                        Liqrate=liq_rate,
+                        OilRate=oil_rate,
+                        LiqRate=liq_rate,
                         Qoil=cum_oil,
                         Qliq=cum_liq,
                         WC=max(0, min(100, wc)),
@@ -482,9 +482,9 @@ class ProductionState(rx.State):
                         Version=0,
                         DataType="Forecast",
                         OilRate=oil_rate,
-                        OilProd=cum_oil,
+                        Qoil=cum_oil,
                         LiqRate=liq_rate,
-                        LiqProd=cum_liq,
+                        Qliq=cum_liq,
                         WC=max(0, min(100, wc)),
                         CreatedAt=created_at
                     )
@@ -662,8 +662,8 @@ class ProductionState(rx.State):
     @rx.var
     def forecast_table_data(self) -> list[dict]:
         return [
-            {"Date": f["date"], "OilRate": f"{f['oilRate']:.1f}", "LiqRate": f"{f['liqRate']:.1f}"}
-            for f in self.forecast_data[:12]
+            {"Date": f["date"], "OilRate": f"{f['oilRate']:.1f}", "LiqRate": f"{f['liqRate']:.1f}", "WC": f"{f['wc']:.1f}"}
+            for f in self.forecast_data
         ]
     
     @rx.var
