@@ -73,6 +73,17 @@ def show_completion_row(completion: CompletionID) -> rx.Component:
                 size="1"
             ),
         ),
+        rx.table.cell(
+            rx.badge(
+                rx.cond(
+                    completion.Dl,
+                    completion.Dl.to(str),
+                    "-"
+                ),
+                color_scheme="orange",
+                size="1"
+            ),
+        ),
         style={"_hover": {"bg": rx.color("gray", 3)}, "cursor": "pointer"},
         align="center",
         on_click=lambda: ProductionState.set_selected_unique_id(completion.UniqueId),
@@ -90,7 +101,8 @@ def completion_table() -> rx.Component:
                     rx.table.column_header_cell(rx.text("Reservoir", size="1", weight="bold")),
                     rx.table.column_header_cell(rx.text("Completion", size="1", weight="bold")),
                     rx.table.column_header_cell(rx.text("KH", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("Do (Di)", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("Doil", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("Dliq", size="1", weight="bold")),
                 ),
             ),
             rx.table.body(
@@ -360,6 +372,7 @@ def forecast_result_table() -> rx.Component:
                     rx.table.column_header_cell(rx.text("Date", size="1", weight="bold")),
                     rx.table.column_header_cell(rx.text("Oil Rate", size="1", weight="bold")),
                     rx.table.column_header_cell(rx.text("Liq Rate", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("WC %", size="1", weight="bold")),
                 ),
             ),
             rx.table.body(
@@ -369,6 +382,21 @@ def forecast_result_table() -> rx.Component:
                         rx.table.cell(rx.text(row["Date"], size="1")),
                         rx.table.cell(rx.text(row["OilRate"], size="1")),
                         rx.table.cell(rx.text(row["LiqRate"], size="1")),
+                        rx.table.cell(
+                            rx.badge(
+                                row["WC"],
+                                color_scheme=rx.cond(
+                                    row["WC_val"].to(float) > 80,
+                                    "red",
+                                    rx.cond(
+                                        row["WC_val"].to(float) > 50,
+                                        "yellow",
+                                        "green"
+                                    )
+                                ),
+                                size="1"
+                            )
+                        ),
                         style={"_hover": {"bg": rx.color("blue", 2)}},
                     )
                 ),

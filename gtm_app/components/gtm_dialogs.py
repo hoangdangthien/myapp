@@ -6,25 +6,34 @@ from ..models import (
     PLATFORM_OPTIONS, 
     RESERVOIR_OPTIONS,
     GTM_TYPE_OPTIONS,
-    GTM_CATEGORY_OPTIONS,
     STATUS_OPTIONS
 )
 from ..states.gtm_state import GTMState
 from .form_fields import form_field, select_field
 
+# Category options for GTM
+GTM_CATEGORY_OPTIONS = [
+    "Using Drilling Platform",
+    "Not Using Platform",
+    "Subsea",
+    "Other"
+]
+
+
 def search_gtm():
     return rx.flex(
-                    rx.input(
-                        rx.input.slot(rx.icon("search")),
-                        placeholder="Search intervention...",
-                        size="1",
-                        width="100%",
-                        max_width="225px",
-                        variant="surface",
-                        on_change=lambda value:GTMState.filter_intervention(value)
-                        
-                    ),
-                    )
+        rx.input(
+            rx.input.slot(rx.icon("search")),
+            placeholder="Search intervention...",
+            size="1",
+            width="100%",
+            max_width="225px",
+            variant="surface",
+            on_change=lambda value: GTMState.filter_intervention(value)
+        ),
+    )
+
+
 def add_gtm_button() -> rx.Component:
     """Button and dialog for adding a new GTM/Intervention."""
     return rx.dialog.root(
@@ -51,7 +60,7 @@ def add_gtm_button() -> rx.Component:
                     ),
                     rx.grid(
                         select_field("Type GTM", GTM_TYPE_OPTIONS, "TypeGTM"),
-                        select_field("Category GTM", GTM_CATEGORY_OPTIONS, "TypeGTM"),
+                        select_field("Category", GTM_CATEGORY_OPTIONS, "Category"),
                         form_field("Planning Date", "", "date", "PlanningDate"),
                         select_field("Status", STATUS_OPTIONS, "Status"),
                         columns="2",
@@ -76,12 +85,8 @@ def add_gtm_button() -> rx.Component:
                         spacing="2",
                         width="100%",
                     ),
-                    rx.grid(
-                        form_field("Describe intervention","Describe detail intervention activity","text",""),
-                        columns="3",
-                        spacing="2",
-                        width="100%",
-                    ),
+                    rx.text("Description", size="2", weight="bold"),
+                    form_field("Describe intervention", "Describe detail intervention activity", "text", "Describe",required=False),
                     rx.flex(
                         rx.dialog.close(
                             rx.button("Cancel", variant="soft", color_scheme="gray"),
@@ -118,7 +123,7 @@ def load_excel_button() -> rx.Component:
             rx.dialog.title("Load Interventions from Excel"),
             rx.dialog.description(
                 "Upload an Excel file with intervention data. Required columns: "
-                "UniqueId, Field, Platform, Reservoir, TypeGTM,CategoryGTM, PlanningDate, Status, "
+                "UniqueId, Field, Platform, Reservoir, TypeGTM, Category, PlanningDate, Status, "
                 "InitialORate, bo, Dio, InitialLRate, bl, Dil"
             ),
             rx.vstack(
@@ -187,7 +192,7 @@ def update_gtm_dialog(gtm: Intervention) -> rx.Component:
                     ),
                     rx.grid(
                         select_field("Type GTM", GTM_TYPE_OPTIONS, "TypeGTM", gtm.TypeGTM),
-                        select_field("Category GTM", GTM_CATEGORY_OPTIONS, "CategoryGTM"),
+                        select_field("Category", GTM_CATEGORY_OPTIONS, "Category", gtm.Category),
                         form_field("Planning Date", "", "date", "PlanningDate", gtm.PlanningDate),
                         select_field("Status", STATUS_OPTIONS, "Status", gtm.Status),
                         columns="2",
@@ -205,20 +210,15 @@ def update_gtm_dialog(gtm: Intervention) -> rx.Component:
                     ),
                     rx.text("Decline Parameters - Liquid", size="2", weight="bold"),
                     rx.grid(
-                        form_field("Initial Liq Rate", "0", "number", "InitialLRate", gtm.InitialLRate.to(str)),#use to str is working not use str(gtm.InitialLRate)
+                        form_field("Initial Liq Rate", "0", "number", "InitialLRate", gtm.InitialLRate.to(str)),
                         form_field("b (liquid)", "0", "number", "bl", gtm.bl.to(str)),
                         form_field("Di (liquid)", "0", "number", "Dil", gtm.Dil.to(str)),
                         columns="3",
                         spacing="2",
                         width="100%",
                     ),
-                    rx.text("Describe detail intervention activity"),
-                    rx.grid(
-                        form_field("Describe intervention","Describe detail intervention activity","text",gtm.Describe.to(str)),
-                        columns="3",
-                        spacing="2",
-                        width="100%",
-                    ),
+                    rx.text("Description", size="2", weight="bold"),
+                    form_field("Describe intervention", "Describe detail intervention activity", "text", "Describe", gtm.Describe.to(str),required=False),
                     rx.flex(
                         rx.dialog.close(
                             rx.button("Cancel", variant="soft", color_scheme="gray"),
