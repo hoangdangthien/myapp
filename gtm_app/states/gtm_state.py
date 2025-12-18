@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import numpy as np
 from sqlmodel import String, asc, cast, desc, func, or_, select, delete
 
-from ..models import Intervention, InterventionProd, HistoryProd, MAX_FORECAST_VERSIONS
+from ..models import Intervention, InterventionForecast, HistoryProd, MAX_FORECAST_VERSIONS
 
 
 class GTMState(rx.State):
@@ -55,6 +55,7 @@ class GTMState(rx.State):
     # Phase selection for chart (checkboxes for multi-select)
     show_oil: bool = True
     show_liquid: bool = True
+    show_wc: bool = True  # Water Cut toggle
     
     # Search/filter state
     search_value: str = ""
@@ -79,6 +80,10 @@ class GTMState(rx.State):
     def toggle_liquid(self, checked: bool):
         """Toggle liquid phase visibility."""
         self.show_liquid = checked
+    
+    def toggle_wc(self, checked: bool):
+        """Toggle water cut visibility."""
+        self.show_wc = checked
 
     def load_gtms(self):
         """Load all GTMs from database."""
@@ -137,8 +142,8 @@ class GTMState(rx.State):
                     # Calculate Water Cut: WC = (Liqrate - Oilrate) / Liqrate * 100
                     # This gives percentage of water in total liquid production
                     wc = 0.0
-                    oil_rate = rec.Oilrate if rec.Oilrate else 0.0
-                    liq_rate = rec.Liqrate if rec.Liqrate else 0.0
+                    oil_rate = rec.OilRate if rec.OilRate else 0.0
+                    liq_rate = rec.LiqRate if rec.LiqRate else 0.0
                     
                     if liq_rate > 0:
                         wc = ((liq_rate - oil_rate) / liq_rate) * 100
@@ -156,11 +161,11 @@ class GTMState(rx.State):
                         "Dayon": rec.Dayon if rec.Dayon else 0.0
                     })
                 
-                # Load available forecast versions from InterventionProd
+                # Load available forecast versions from InterventionForecast
                 forecast_versions = session.exec(
-                    select(InterventionProd.Version).where(
-                        InterventionProd.UniqueId == self.selected_id,
-                        InterventionProd.Version > 0
+                    select(InterventionForecast.Version).where(
+                        InterventionForecast.UniqueId == self.selected_id,
+                        InterventionForecast.Version > 0
                     ).distinct()
                 ).all()
                 self.available_forecast_versions = sorted(forecast_versions)
@@ -196,10 +201,10 @@ class GTMState(rx.State):
         try:
             with rx.session() as session:
                 forecast_records = session.exec(
-                    InterventionProd.select().where(
-                        InterventionProd.UniqueId == self.selected_id,
-                        InterventionProd.Version == self.current_forecast_version
-                    ).order_by(InterventionProd.Date)
+                    InterventionForecast.select().where(
+                        InterventionForecast.UniqueId == self.selected_id,
+                        InterventionForecast.Version == self.current_forecast_version
+                    ).order_by(InterventionForecast.Date)
                 ).all()
                 
                 self.forecast_data = [
@@ -225,7 +230,7 @@ class GTMState(rx.State):
         self.load_gtms()
     
     def update_chart_data(self):
-        """Update chart data combining actual history and forecast."""
+        """Update chart data combining actual history and forecast with Water Cut."""
         chart_points = []
         
         # Add actual production data from HistoryProd (sorted by date ascending)
@@ -237,15 +242,23 @@ class GTMState(rx.State):
                 "date": date_str,
                 "oilRate": prod["OilRate"],
                 "liqRate": prod["LiqRate"],
+                "wc": prod["WC"],  # Water Cut from history
                 "type": "actual"
             })
         
         # Add forecast data if available
         for fc in self.forecast_data:
+            # Calculate forecast WC from oil and liquid rates
+            wc_forecast = 0.0
+            if fc["liqRate"] > 0:
+                wc_forecast = ((fc["liqRate"] - fc["oilRate"]) / fc["liqRate"]) * 100
+                wc_forecast = max(0.0, min(100.0, wc_forecast))
+            
             chart_points.append({
                 "date": fc["date"],
                 "oilRateForecast": fc["oilRate"],
                 "liqRateForecast": fc["liqRate"],
+                "wcForecast": round(wc_forecast, 2),  # Forecast Water Cut
                 "type": "forecast"
             })
         
@@ -270,12 +283,12 @@ class GTMState(rx.State):
         """
         # Get existing forecast versions with their creation timestamps
         existing_versions = session.exec(
-            select(InterventionProd.Version, func.min(InterventionProd.CreatedAt))
+            select(InterventionForecast.Version, func.min(InterventionForecast.CreatedAt))
             .where(
-                InterventionProd.UniqueId == unique_id,
-                InterventionProd.Version > 0
+                InterventionForecast.UniqueId == unique_id,
+                InterventionForecast.Version > 0
             )
-            .group_by(InterventionProd.Version)
+            .group_by(InterventionForecast.Version)
         ).all()
         
         if not existing_versions:
@@ -294,9 +307,9 @@ class GTMState(rx.State):
         
         # Delete oldest version's records
         session.exec(
-            delete(InterventionProd).where(
-                InterventionProd.UniqueId == unique_id,
-                InterventionProd.Version == oldest_version
+            delete(InterventionForecast).where(
+                InterventionForecast.UniqueId == unique_id,
+                InterventionForecast.Version == oldest_version
             )
         )
         session.commit()
@@ -304,7 +317,7 @@ class GTMState(rx.State):
         return oldest_version
     
     def _save_forecast_to_db(self, unique_id: str, forecast_points: list[dict]) -> int:
-        """Save forecast data to InterventionProd table with version control.
+        """Save forecast data to InterventionForecast table with version control.
         
         Args:
             unique_id: The well/intervention identifier
@@ -340,7 +353,7 @@ class GTMState(rx.State):
                     wc = ((liq_rate - oil_rate) / liq_rate * 100) if liq_rate > 0 else 0
                     
                     # Create record
-                    prod_record = InterventionProd(
+                    prod_record = InterventionForecast(
                         UniqueId=unique_id,
                         Date=date,
                         Version=version,
@@ -368,7 +381,7 @@ class GTMState(rx.State):
         For 'Plan' status: Uses PlanningDate as start date with parameters from InterventionID
         For 'Done' status: Uses last production data as start point
         
-        After generating forecast, saves to InterventionProd table with version control (FIFO, max 3).
+        After generating forecast, saves to InterventionForecast table with version control (FIFO, max 3).
         """
         if not self.current_gtm or not self.forecast_end_date:
             return rx.toast.error("Please select an intervention and set forecast end date")
@@ -451,9 +464,9 @@ class GTMState(rx.State):
             # Reload available versions
             with rx.session() as session:
                 forecast_versions = session.exec(
-                    select(InterventionProd.Version).where(
-                        InterventionProd.UniqueId == self.selected_id,
-                        InterventionProd.Version > 0
+                    select(InterventionForecast.Version).where(
+                        InterventionForecast.UniqueId == self.selected_id,
+                        InterventionForecast.Version > 0
                     ).distinct()
                 ).all()
                 self.available_forecast_versions = sorted(forecast_versions)
@@ -477,9 +490,9 @@ class GTMState(rx.State):
         try:
             with rx.session() as session:
                 session.exec(
-                    delete(InterventionProd).where(
-                        InterventionProd.UniqueId == self.selected_id,
-                        InterventionProd.Version == version
+                    delete(InterventionForecast).where(
+                        InterventionForecast.UniqueId == self.selected_id,
+                        InterventionForecast.Version == version
                     )
                 )
                 session.commit()
