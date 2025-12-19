@@ -1,4 +1,4 @@
-"""State management for Well Intervention (GTM) operations with KMonth DCA."""
+"""State management for Well Intervention (GTM) operations - Using elapsed days DCA pattern."""
 import reflex as rx
 from collections import Counter
 from typing import Optional
@@ -17,23 +17,23 @@ from ..models import (
 from ..utils.dca_utils import (
     arps_exponential,
     arps_decline,
-    generate_monthly_dates,
-    calculate_elapsed_days,
-    calculate_cumulative_production,
+    generate_forecast_dates,
     calculate_water_cut,
-    run_dca_forecast,
+    run_dca_forecast_intervention,
     ForecastPoint,
 )
 
 
 class GTMState(rx.State):
-    """State for managing Well Intervention (GTM) data with KMonth DCA.
+    """State for managing Well Intervention (GTM) data.
     
-    Uses:
-    - pandas date_range with freq="MS" for monthly dates
-    - KMonth table for uptime factors (K_int)
-    - Arps decline functions (Exponential/Hyperbolic)
-    - Cumulative: Qoil = K_int * days_in_month * OilRate
+    DCA Formula: q(t) = qi * exp(-di * 12/365 * t)
+    Where:
+    - qi = Initial rate (t/day)
+    - di = Decline rate (1/year)
+    - t = Elapsed days from start
+    
+    For interventions: Qoil = OilRate * K_int * days_in_month
     """
     
     # List of all interventions
@@ -42,7 +42,7 @@ class GTMState(rx.State):
     # Historical production data from HistoryProd table (last 5 years)
     history_prod: list[dict] = []
     
-    # KMonth data cache
+    # KMonth data cache {month_id: {K_oil, K_liq, K_int, K_inj}}
     k_month_data: dict = {}
     
     # Data transformed for graph visualization
@@ -93,7 +93,8 @@ class GTMState(rx.State):
     add_dialog_open: bool = False
     
     # DCA mode (True=Exponential, False=Hyperbolic)
-    use_exponential_dca: bool = False  # Intervention uses Hyperbolic by default
+    # Intervention uses Hyperbolic by default (considers b parameter)
+    use_exponential_dca: bool = False
     
     def set_add_dialog_open(self, is_open: bool):
         self.add_dialog_open = is_open
@@ -121,9 +122,19 @@ class GTMState(rx.State):
                     }
                     for rec in k_records
                 }
+                
+            # If no KMonth data, use defaults
+            if not self.k_month_data:
+                self.k_month_data = {
+                    i: {"K_oil": 1.0, "K_liq": 1.0, "K_int": 1.0, "K_inj": 1.0} 
+                    for i in range(1, 13)
+                }
         except Exception as e:
             print(f"Error loading KMonth data: {e}")
-            self.k_month_data = {i: {"K_oil": 1.0, "K_liq": 1.0, "K_int": 1.0, "K_inj": 1.0} for i in range(1, 13)}
+            self.k_month_data = {
+                i: {"K_oil": 1.0, "K_liq": 1.0, "K_int": 1.0, "K_inj": 1.0} 
+                for i in range(1, 13)
+            }
 
     def load_gtms(self):
         """Load all GTMs from database."""
@@ -362,13 +373,15 @@ class GTMState(rx.State):
             raise
 
     def run_forecast(self):
-        """Run Arps decline curve forecast using pandas date_range and KMonth.
+        """Run Arps decline curve forecast using elapsed days pattern.
+        
+        Formula: q(t) = qi * exp(-di * 12/365 * t) for exponential
+        Where t is elapsed days from start date.
         
         For 'Plan' status: Uses PlanningDate as start with parameters from InterventionID
         For 'Done' status: Uses last production data as start point
         
-        Uses K_int from KMonth table for intervention cumulative calculation:
-        Qoil = K_int * days_in_month * OilRate
+        Cumulative: Qoil = OilRate * K_int * days_in_month
         """
         if not self.current_gtm or not self.forecast_end_date:
             return rx.toast.error("Please select an intervention and set forecast end date")
@@ -404,9 +417,6 @@ class GTMState(rx.State):
                 qi_oil = last_prod["OilRate"] if last_prod["OilRate"] > 0 else qi_oil
                 qi_liq = last_prod["LiqRate"] if last_prod["LiqRate"] > 0 else qi_liq
             
-            # Move start date to next month start for forecasting
-            start_date = (start_date.replace(day=1) + timedelta(days=32)).replace(day=1)
-            
             if end_date <= start_date:
                 return rx.toast.error(f"Forecast end date must be after {start_date.strftime('%Y-%m-%d')}")
             
@@ -414,17 +424,8 @@ class GTMState(rx.State):
             if not self.k_month_data:
                 self.load_k_month_data()
             
-            # Prepare K_int specific data for intervention
-            k_int_data = {}
-            for month_id, k_values in self.k_month_data.items():
-                k_int_data[month_id] = {
-                    "K_oil": k_values.get("K_int", 1.0),  # Use K_int for intervention
-                    "K_liq": k_values.get("K_int", 1.0),
-                    "K_int": k_values.get("K_int", 1.0)
-                }
-            
-            # Run DCA forecast using utility function
-            forecast_points = run_dca_forecast(
+            # Run DCA forecast using intervention-specific function (uses K_int)
+            forecast_points = run_dca_forecast_intervention(
                 start_date=start_date,
                 end_date=end_date,
                 qi_oil=qi_oil,
@@ -433,7 +434,7 @@ class GTMState(rx.State):
                 qi_liq=qi_liq,
                 di_liq=di_liq,
                 b_liq=b_liq,
-                k_month_data=k_int_data,
+                k_month_data=self.k_month_data,
                 use_exponential=self.use_exponential_dca
             )
             

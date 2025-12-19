@@ -1,4 +1,4 @@
-"""State management for Production page with DCA forecasting - Optimized with KMonth."""
+"""State management for Production page with DCA forecasting - Using elapsed days pattern."""
 import reflex as rx
 from typing import Optional, Dict
 from datetime import datetime, timedelta
@@ -18,9 +18,7 @@ from ..models import (
 from ..utils.dca_utils import (
     arps_exponential,
     arps_decline,
-    generate_monthly_dates,
-    calculate_elapsed_days,
-    calculate_cumulative_production,
+    generate_forecast_dates,
     calculate_water_cut,
     run_dca_forecast,
     ForecastPoint,
@@ -28,13 +26,15 @@ from ..utils.dca_utils import (
 
 
 class ProductionState(rx.State):
-    """State for Production monitoring and forecasting with KMonth integration.
+    """State for Production monitoring and forecasting.
     
-    Uses:
-    - pandas date_range with freq="MS" for monthly dates
-    - KMonth table for uptime factors (K_oil, K_liq)
-    - Arps decline functions for DCA
-    - Cumulative production: Qoil = K_oil * days_in_month * OilRate
+    DCA Formula: q(t) = qi * exp(-di * 12/365 * t)
+    Where:
+    - qi = Initial rate (t/day)
+    - di = Decline rate (1/year)  
+    - t = Elapsed days from start
+    
+    Cumulative: Qoil = OilRate * K_oil * days_in_month
     """
     
     # CompletionID data (cached)
@@ -48,7 +48,7 @@ class ProductionState(rx.State):
     # History production data (last 5 years)
     history_prod: list[dict] = []
     
-    # KMonth data cache
+    # KMonth data cache {month_id: {K_oil, K_liq, K_int, K_inj}}
     k_month_data: dict = {}
     
     # Forecast parameters and results
@@ -71,11 +71,11 @@ class ProductionState(rx.State):
     search_value: str = ""
     selected_reservoir: str = ""
     
-    # DCA parameters
+    # DCA parameters from CompletionID
     qi_oil: float = 0.0
     qi_liq: float = 0.0
-    dio: float = 0.0
-    dil: float = 0.0
+    dio: float = 0.0  # Decline rate for oil (1/year)
+    dil: float = 0.0  # Decline rate for liquid (1/year)
     b_oil: float = 0.0  # Decline exponent for oil
     b_liq: float = 0.0  # Decline exponent for liquid
     
@@ -87,8 +87,8 @@ class ProductionState(rx.State):
     is_loading_completions: bool = False
     is_loading_production: bool = False
     
-    # DCA mode selection
-    use_exponential_dca: bool = True  # True=Exponential, False=Hyperbolic/Harmonic
+    # DCA mode selection (True=Exponential, False=Hyperbolic)
+    use_exponential_dca: bool = True
     
     def toggle_oil(self, checked: bool):
         self.show_oil = checked
@@ -117,10 +117,19 @@ class ProductionState(rx.State):
                     }
                     for rec in k_records
                 }
+                
+            # If no KMonth data, use defaults
+            if not self.k_month_data:
+                self.k_month_data = {
+                    i: {"K_oil": 1.0, "K_liq": 1.0, "K_int": 1.0, "K_inj": 1.0} 
+                    for i in range(1, 13)
+                }
         except Exception as e:
             print(f"Error loading KMonth data: {e}")
-            # Default K factors = 1.0 for all months
-            self.k_month_data = {i: {"K_oil": 1.0, "K_liq": 1.0, "K_int": 1.0, "K_inj": 1.0} for i in range(1, 13)}
+            self.k_month_data = {
+                i: {"K_oil": 1.0, "K_liq": 1.0, "K_int": 1.0, "K_inj": 1.0} 
+                for i in range(1, 13)
+            }
 
     def load_completions(self):
         """Load all completions from CompletionID table."""
@@ -495,13 +504,12 @@ class ProductionState(rx.State):
             raise
 
     def run_forecast(self):
-        """Run DCA forecast using pandas date_range and KMonth integration.
+        """Run DCA forecast using elapsed days pattern.
         
-        Uses:
-        - pd.date_range(start, end, freq="MS") for monthly dates
-        - KMonth table for K factors
-        - Qoil = K_oil * days_in_month * OilRate
-        - Qliq = K_liq * days_in_month * LiqRate
+        Formula: q(t) = qi * exp(-di * 12/365 * t)
+        Where t is elapsed days from start date.
+        
+        Cumulative: Qoil = OilRate * K_oil * days_in_month
         """
         if not self.selected_completion or not self.forecast_end_date:
             return rx.toast.error("Please select a completion and set forecast end date")
@@ -523,9 +531,6 @@ class ProductionState(rx.State):
                 start_date = last_prod["Date"]
             else:
                 start_date = datetime.strptime(str(last_prod["Date"]), "%Y-%m-%d")
-            
-            # Move start date to next month start
-            #start_date = (start_date.replace(day=1) + timedelta(days=32)).replace(day=1)
             
             if end_date <= start_date:
                 return rx.toast.error(f"End date must be after {start_date.strftime('%Y-%m-%d')}")
