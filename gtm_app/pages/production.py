@@ -42,7 +42,7 @@ def forecast_section() -> rx.Component:
     return rx.card(
         rx.vstack(
             rx.hstack(
-                rx.heading("Production Forecast (Exponential DCA)", size="4"),
+                rx.heading("Production Forecast", size="4"),
                 rx.spacer(),
                 forecast_controls(),
                 width="100%",
@@ -119,11 +119,6 @@ def production_page() -> rx.Component:
         rx.hstack(
             rx.vstack(
                 rx.heading("Production Monitoring", size="6"),
-                rx.text(
-                    "Exponential Decline Curve Analysis (DCA) with KMonth Integration",
-                    size="2",
-                    color=rx.color("gray", 10)
-                ),
                 spacing="1",
                 align="start",
             ),
@@ -159,31 +154,6 @@ def production_page() -> rx.Component:
         
         # Production Rate Chart (full width)
         production_rate_chart(),
-        
-        # DCA Formula Reference
-        rx.card(
-            rx.hstack(
-                rx.icon("info", size=16, color=rx.color("blue", 9)),
-                rx.vstack(
-                    rx.text("Exponential Decline Curve Analysis with KMonth", weight="bold", size="2"),
-                    rx.text(
-                        "Formula: q(t) = qi × exp(-Di × t) | "
-                        "Cumulative: Q = K × days × rate | "
-                        "K factors from KMonth table per month | "
-                        "Dates generated with pandas date_range(freq='MS')",
-                        size="1",
-                        color=rx.color("gray", 10)
-                    ),
-                    spacing="0",
-                    align="start",
-                ),
-                spacing="2",
-                width="100%",
-            ),
-            padding="0.75em",
-            variant="surface",
-        ),
-        
         align="start",
         spacing="4",
         width="100%",
