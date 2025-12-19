@@ -168,7 +168,10 @@ GTM_TYPE_OPTIONS = [
     "Acidizing",
     "Sand Control",
 ]
-
+GTM_CATEGORY_OPTIONS = [
+    "Using drilling Platform",
+    "Not using drilling Platform"
+]
 # Status options
 STATUS_OPTIONS = ["Plan", "Done", "Cancelled"]
 
