@@ -1,8 +1,9 @@
-"""State management for Production page with DCA forecasting - Optimized."""
+"""State management for Production page with DCA forecasting - Optimized with KMonth."""
 import reflex as rx
-from typing import Optional
+from typing import Optional, Dict
 from datetime import datetime, timedelta
 import numpy as np
+import pandas as pd
 from sqlmodel import select, delete, func, desc
 
 from ..models import (
@@ -11,22 +12,34 @@ from ..models import (
     ProductionForecast, 
     Intervention,
     InterventionForecast,
+    KMonth,
     MAX_PRODUCTION_FORECAST_VERSIONS
+)
+from ..utils.dca_utils import (
+    arps_exponential,
+    arps_decline,
+    generate_monthly_dates,
+    calculate_elapsed_days,
+    calculate_cumulative_production,
+    calculate_water_cut,
+    run_dca_forecast,
+    ForecastPoint,
 )
 
 
 class ProductionState(rx.State):
-    """State for Production monitoring and forecasting.
+    """State for Production monitoring and forecasting with KMonth integration.
     
-    Optimized for performance with:
-    - Background tasks for heavy database operations
-    - Separated completion loading from production data loading
-    - Cached completion list
+    Uses:
+    - pandas date_range with freq="MS" for monthly dates
+    - KMonth table for uptime factors (K_oil, K_liq)
+    - Arps decline functions for DCA
+    - Cumulative production: Qoil = K_oil * days_in_month * OilRate
     """
     
     # CompletionID data (cached)
     completions: list[CompletionID] = []
-    _all_completions: list[CompletionID] = []  # Full cache for filtering
+    _all_completions: list[CompletionID] = []
     
     selected_completion: Optional[CompletionID] = None
     selected_unique_id: str = ""
@@ -34,6 +47,9 @@ class ProductionState(rx.State):
     
     # History production data (last 5 years)
     history_prod: list[dict] = []
+    
+    # KMonth data cache
+    k_month_data: dict = {}
     
     # Forecast parameters and results
     forecast_end_date: str = ""
@@ -49,19 +65,21 @@ class ProductionState(rx.State):
     # Phase display toggles
     show_oil: bool = True
     show_liquid: bool = True
-    show_wc: bool = True  # Water Cut toggle
+    show_wc: bool = True
     
-    # Search/filter (local filtering, no DB query)
+    # Search/filter
     search_value: str = ""
     selected_reservoir: str = ""
     
-    # DCA parameters (from CompletionID and calculated)
+    # DCA parameters
     qi_oil: float = 0.0
     qi_liq: float = 0.0
     dio: float = 0.0
     dil: float = 0.0
+    b_oil: float = 0.0  # Decline exponent for oil
+    b_liq: float = 0.0  # Decline exponent for liquid
     
-    # Intervention status for selected well
+    # Intervention status
     has_planned_intervention: bool = False
     intervention_info: str = ""
     
@@ -69,36 +87,60 @@ class ProductionState(rx.State):
     is_loading_completions: bool = False
     is_loading_production: bool = False
     
+    # DCA mode selection
+    use_exponential_dca: bool = True  # True=Exponential, False=Hyperbolic/Harmonic
+    
     def toggle_oil(self, checked: bool):
-        """Toggle oil phase visibility."""
         self.show_oil = checked
     
     def toggle_liquid(self, checked: bool):
-        """Toggle liquid phase visibility."""
         self.show_liquid = checked
     
     def toggle_wc(self, checked: bool):
-        """Toggle water cut visibility."""
         self.show_wc = checked
+    
+    def set_dca_mode(self, use_exponential: bool):
+        """Toggle between Exponential and Hyperbolic DCA."""
+        self.use_exponential_dca = use_exponential
+
+    def load_k_month_data(self):
+        """Load KMonth data from database and cache it."""
+        try:
+            with rx.session() as session:
+                k_records = session.exec(select(KMonth)).all()
+                self.k_month_data = {
+                    rec.MonthID: {
+                        "K_oil": rec.K_oil if rec.K_oil else 1.0,
+                        "K_liq": rec.K_liq if rec.K_liq else 1.0,
+                        "K_int": rec.K_int if rec.K_int else 1.0,
+                        "K_inj": rec.K_inj if rec.K_inj else 1.0
+                    }
+                    for rec in k_records
+                }
+        except Exception as e:
+            print(f"Error loading KMonth data: {e}")
+            # Default K factors = 1.0 for all months
+            self.k_month_data = {i: {"K_oil": 1.0, "K_liq": 1.0, "K_int": 1.0, "K_inj": 1.0} for i in range(1, 13)}
 
     def load_completions(self):
-        """Load all completions from CompletionID table (initial load only)."""
+        """Load all completions from CompletionID table."""
         if self._all_completions:
-            # Already loaded, just apply filters
             self._apply_filters()
             return
             
         try:
             self.is_loading_completions = True
+            
+            # Load KMonth data first
+            self.load_k_month_data()
+            
             with rx.session() as session:
                 self._all_completions = session.exec(select(CompletionID)).all()
             
             self._apply_filters()
             
-            # Auto-select first if available
             if self.available_unique_ids and not self.selected_unique_id:
                 self.selected_unique_id = self.available_unique_ids[0]
-                # Don't auto-load production data on initial load to avoid lag
                 
         except Exception as e:
             print(f"Error loading completions: {e}")
@@ -107,10 +149,9 @@ class ProductionState(rx.State):
             self.is_loading_completions = False
 
     def _apply_filters(self):
-        """Apply search and reservoir filters to cached completions (no DB query)."""
+        """Apply search and reservoir filters to cached completions."""
         filtered = self._all_completions
         
-        # Apply search filter
         if self.search_value:
             search_lower = self.search_value.lower()
             filtered = [
@@ -119,7 +160,6 @@ class ProductionState(rx.State):
                    (c.WellName and search_lower in c.WellName.lower())
             ]
         
-        # Apply reservoir filter
         if self.selected_reservoir:
             filtered = [c for c in filtered if c.Reservoir == self.selected_reservoir]
         
@@ -127,19 +167,17 @@ class ProductionState(rx.State):
         self.available_unique_ids = [c.UniqueId for c in self.completions]
 
     def filter_completions(self, search_value: str):
-        """Filter completions by search term (local filtering, no DB)."""
         self.search_value = search_value
         self._apply_filters()
 
     def filter_by_reservoir(self, reservoir: str):
-        """Filter by reservoir (local filtering, no DB)."""
         self.selected_reservoir = reservoir if reservoir != "All Reservoirs" else ""
         self._apply_filters()
 
     def set_selected_unique_id(self, unique_id: str):
-        """Set selected completion and trigger background data load."""
+        """Set selected completion and trigger data load."""
         if unique_id == self.selected_unique_id:
-            return  # No change, skip reload
+            return
             
         self.selected_unique_id = unique_id
         self.forecast_data = []
@@ -147,7 +185,6 @@ class ProductionState(rx.State):
         self.history_prod = []
         self.chart_data = []
         
-        # Find completion from cache (no DB query)
         self.selected_completion = next(
             (c for c in self._all_completions if c.UniqueId == unique_id), 
             None
@@ -157,12 +194,10 @@ class ProductionState(rx.State):
             self.dio = self.selected_completion.Do if self.selected_completion.Do else 0.0
             self.dil = self.selected_completion.Dl if self.selected_completion.Dl else 0.0
         
-        # Load production data in background
         return ProductionState.load_production_data_background
 
-    #@rx.event(background=True)
     async def load_production_data_background(self):
-        """Load production data in background to prevent UI blocking."""
+        """Load production data in background."""
         async with self:
             self.is_loading_production = True
         
@@ -182,7 +217,6 @@ class ProductionState(rx.State):
             intervention_text = ""
             
             with rx.session() as session:
-                # Load history production
                 history_records = session.exec(
                     select(HistoryProd).where(
                         HistoryProd.UniqueId == unique_id,
@@ -193,11 +227,7 @@ class ProductionState(rx.State):
                 for rec in history_records:
                     oil_rate = rec.OilRate if rec.OilRate else 0.0
                     liq_rate = rec.LiqRate if rec.LiqRate else 0.0
-                    
-                    wc = 0.0
-                    if liq_rate > 0:
-                        wc = ((liq_rate - oil_rate) / liq_rate) * 100
-                        wc = max(0.0, min(100.0, wc))
+                    wc = calculate_water_cut(oil_rate, liq_rate)
                     
                     history_data.append({
                         "UniqueId": rec.UniqueId,
@@ -229,7 +259,6 @@ class ProductionState(rx.State):
                     ).distinct()
                 ).all())
             
-            # Update state with loaded data
             async with self:
                 self.history_prod = history_data
                 self.has_planned_intervention = has_intervention
@@ -246,13 +275,11 @@ class ProductionState(rx.State):
                     self.qi_oil = 0.0
                     self.qi_liq = 0.0
                 
-                # Load latest forecast if available
                 if self.available_forecast_versions:
                     self.current_forecast_version = max(self.available_forecast_versions)
                 
                 self.is_loading_production = False
             
-            # Load forecast data if version exists
             async with self:
                 if self.current_forecast_version > 0:
                     await self._load_forecast_data()
@@ -265,7 +292,7 @@ class ProductionState(rx.State):
                 self.is_loading_production = False
 
     async def _load_forecast_data(self):
-        """Load forecast data for current version (called from background)."""
+        """Load forecast data for current version."""
         if not self.selected_unique_id or self.current_forecast_version == 0:
             self.forecast_data = []
             return
@@ -284,8 +311,8 @@ class ProductionState(rx.State):
                         "date": rec.Date.strftime("%Y-%m-%d") if isinstance(rec.Date, datetime) else str(rec.Date),
                         "oilRate": rec.OilRate,
                         "liqRate": rec.LiqRate,
-                        "cumOil": rec.Qoil,
-                        "cumLiq": rec.Qliq,
+                        "qOil": rec.Qoil,
+                        "qLiq": rec.Qliq,
                         "wc": rec.WC
                     }
                     for rec in forecast_records
@@ -295,7 +322,7 @@ class ProductionState(rx.State):
             self.forecast_data = []
 
     def load_forecast_from_db(self):
-        """Load forecast data synchronously (for version switching)."""
+        """Load forecast data synchronously."""
         if not self.selected_unique_id or self.current_forecast_version == 0:
             self.forecast_data = []
             return
@@ -314,8 +341,8 @@ class ProductionState(rx.State):
                         "date": rec.Date.strftime("%Y-%m-%d") if isinstance(rec.Date, datetime) else str(rec.Date),
                         "oilRate": rec.OilRate,
                         "liqRate": rec.LiqRate,
-                        "cumOil": rec.Qoil,
-                        "cumLiq": rec.Qliq,
+                        "qOil": rec.Qoil,
+                        "qLiq": rec.Qliq,
                         "wc": rec.WC
                     }
                     for rec in forecast_records
@@ -325,19 +352,16 @@ class ProductionState(rx.State):
             self.forecast_data = []
 
     def set_forecast_version(self, version: int):
-        """Set and load a specific forecast version."""
         self.current_forecast_version = version
         self.load_forecast_from_db()
         self._update_chart_data()
 
     def set_forecast_version_from_str(self, version_str: str):
-        """Convert 'v1' -> 1 and load forecast."""
         if version_str and version_str.startswith("v"):
             version = int(version_str[1:])
             self.set_forecast_version(version)
 
     def set_forecast_end_date(self, date: str):
-        """Set the forecast end date."""
         self.forecast_end_date = date
 
     def _update_chart_data(self):
@@ -352,22 +376,18 @@ class ProductionState(rx.State):
                 "date": date_str,
                 "oilRate": prod["OilRate"],
                 "liqRate": prod["LiqRate"],
-                "wc": prod["WC"],  # Water Cut from history
+                "wc": prod["WC"],
                 "type": "actual"
             })
         
         for fc in self.forecast_data:
-            # Calculate forecast WC from oil and liquid rates
-            wc_forecast = 0.0
-            if fc["liqRate"] > 0:
-                wc_forecast = ((fc["liqRate"] - fc["oilRate"]) / fc["liqRate"]) * 100
-                wc_forecast = max(0.0, min(100.0, wc_forecast))
+            wc_forecast = calculate_water_cut(fc["oilRate"], fc["liqRate"])
             
             chart_points.append({
                 "date": fc["date"],
                 "oilRateForecast": fc["oilRate"],
                 "liqRateForecast": fc["liqRate"],
-                "wcForecast": round(wc_forecast, 2),  # Forecast Water Cut
+                "wcForecast": round(wc_forecast, 2),
                 "type": "forecast"
             })
         
@@ -403,42 +423,30 @@ class ProductionState(rx.State):
         
         return oldest_version
 
-    def _save_forecast_to_production_table(self, unique_id: str, forecast_points: list[dict]) -> int:
+    def _save_forecast_to_production_table(
+        self, 
+        unique_id: str, 
+        forecast_points: list[ForecastPoint]
+    ) -> int:
         """Save forecast to ProductionForecast table with FIFO version control."""
         try:
             with rx.session() as session:
                 version = self._get_next_forecast_version(session, unique_id)
-                
-                cum_oil = 0.0
-                cum_liq = 0.0
-                prev_date = None
                 created_at = datetime.now()
                 
-                for point in forecast_points:
-                    date = datetime.strptime(point["date"], "%Y-%m-%d")
-                    oil_rate = point["oilRate"]
-                    liq_rate = point["liqRate"]
-                    
-                    if prev_date:
-                        days = (date - prev_date).days
-                        cum_oil += oil_rate * days
-                        cum_liq += liq_rate * days
-                    
-                    wc = ((liq_rate - oil_rate) / liq_rate * 100) if liq_rate > 0 else 0
-                    
+                for fp in forecast_points:
                     prod_record = ProductionForecast(
                         UniqueId=unique_id,
-                        Date=date,
+                        Date=fp.date,
                         Version=version,
-                        OilRate=oil_rate,
-                        LiqRate=liq_rate,
-                        Qoil=cum_oil,
-                        Qliq=cum_liq,
-                        WC=max(0, min(100, wc)),
+                        OilRate=fp.oil_rate,
+                        LiqRate=fp.liq_rate,
+                        Qoil=fp.q_oil,
+                        Qliq=fp.q_liq,
+                        WC=fp.wc,
                         CreatedAt=created_at
                     )
                     session.add(prod_record)
-                    prev_date = date
                 
                 session.commit()
                 return version
@@ -447,7 +455,11 @@ class ProductionState(rx.State):
             print(f"Error saving forecast: {e}")
             raise
 
-    def _save_to_intervention_prod(self, unique_id: str, forecast_points: list[dict]):
+    def _save_to_intervention_prod(
+        self, 
+        unique_id: str, 
+        forecast_points: list[ForecastPoint]
+    ):
         """Save forecast to InterventionForecast table as version 0."""
         try:
             with rx.session() as session:
@@ -459,37 +471,22 @@ class ProductionState(rx.State):
                 )
                 session.commit()
                 
-                cum_oil = 0.0
-                cum_liq = 0.0
-                prev_date = None
                 created_at = datetime.now()
                 
-                for point in forecast_points:
-                    date = datetime.strptime(point["date"], "%Y-%m-%d")
-                    oil_rate = point["oilRate"]
-                    liq_rate = point["liqRate"]
-                    
-                    if prev_date:
-                        days = (date - prev_date).days
-                        cum_oil += oil_rate * days
-                        cum_liq += liq_rate * days
-                    
-                    wc = ((liq_rate - oil_rate) / liq_rate * 100) if liq_rate > 0 else 0
-                    
+                for fp in forecast_points:
                     intervention_record = InterventionForecast(
                         UniqueId=unique_id,
-                        Date=date,
+                        Date=fp.date,
                         Version=0,
                         DataType="Forecast",
-                        OilRate=oil_rate,
-                        Qoil=cum_oil,
-                        LiqRate=liq_rate,
-                        Qliq=cum_liq,
-                        WC=max(0, min(100, wc)),
+                        OilRate=fp.oil_rate,
+                        LiqRate=fp.liq_rate,
+                        Qoil=fp.q_oil,
+                        Qliq=fp.q_liq,
+                        WC=fp.wc,
                         CreatedAt=created_at
                     )
                     session.add(intervention_record)
-                    prev_date = date
                 
                 session.commit()
                 
@@ -498,7 +495,14 @@ class ProductionState(rx.State):
             raise
 
     def run_forecast(self):
-        """Run Exponential DCA forecast."""
+        """Run DCA forecast using pandas date_range and KMonth integration.
+        
+        Uses:
+        - pd.date_range(start, end, freq="MS") for monthly dates
+        - KMonth table for K factors
+        - Qoil = K_oil * days_in_month * OilRate
+        - Qliq = K_liq * days_in_month * LiqRate
+        """
         if not self.selected_completion or not self.forecast_end_date:
             return rx.toast.error("Please select a completion and set forecast end date")
         
@@ -506,11 +510,12 @@ class ProductionState(rx.State):
             return rx.toast.error("No production history available")
         
         if self.dio <= 0:
-            return rx.toast.error("Invalid decline rate (Di)")
+            return rx.toast.error("Invalid decline rate (Di). Check CompletionID.Do value.")
         
         try:
             end_date = datetime.strptime(self.forecast_end_date, "%Y-%m-%d")
             
+            # Get start date from last production record
             sorted_history = sorted(self.history_prod, key=lambda x: x["Date"])
             last_prod = sorted_history[-1]
             
@@ -519,41 +524,55 @@ class ProductionState(rx.State):
             else:
                 start_date = datetime.strptime(str(last_prod["Date"]), "%Y-%m-%d")
             
+            # Move start date to next month start
+            #start_date = (start_date.replace(day=1) + timedelta(days=32)).replace(day=1)
+            
             if end_date <= start_date:
                 return rx.toast.error(f"End date must be after {start_date.strftime('%Y-%m-%d')}")
             
-            forecast_points = []
-            current_date = start_date + timedelta(days=30)
-            t = 1
+            # Ensure KMonth data is loaded
+            if not self.k_month_data:
+                self.load_k_month_data()
             
-            while current_date <= end_date:
-                oil_rate = self.qi_oil * np.exp(-self.dio * t)
-                liq_rate = self.qi_liq * np.exp(-self.dil * t)
-                
-                forecast_points.append({
-                    "date": current_date.strftime("%Y-%m-%d"),
-                    "oilRate": max(0, round(oil_rate, 2)),
-                    "liqRate": max(0, round(liq_rate, 2))
-                })
-                
-                current_date += timedelta(days=30)
-                t += 1
+            # Run DCA forecast using utility function
+            forecast_points = run_dca_forecast(
+                start_date=start_date,
+                end_date=end_date,
+                qi_oil=self.qi_oil,
+                di_oil=self.dio,
+                b_oil=self.b_oil,
+                qi_liq=self.qi_liq,
+                di_liq=self.dil,
+                b_liq=self.b_liq,
+                k_month_data=self.k_month_data,
+                use_exponential=self.use_exponential_dca
+            )
             
             if not forecast_points:
-                return rx.toast.error("No forecast points generated")
+                return rx.toast.error("No forecast points generated. Check date range.")
             
+            # Save to database
             version = self._save_forecast_to_production_table(self.selected_unique_id, forecast_points)
             
+            # Save to InterventionProd if planned intervention exists
             if self.has_planned_intervention:
                 self._save_to_intervention_prod(self.selected_unique_id, forecast_points)
             
+            # Update state with forecast data
             self.forecast_data = [
-                {"date": p["date"], "oilRate": p["oilRate"], "liqRate": p["liqRate"],
-                 "cumOil": 0, "cumLiq": 0, "wc": 0}
-                for p in forecast_points
+                {
+                    "date": fp.date.strftime("%Y-%m-%d"),
+                    "oilRate": fp.oil_rate,
+                    "liqRate": fp.liq_rate,
+                    "qOil": fp.q_oil,
+                    "qLiq": fp.q_liq,
+                    "wc": fp.wc
+                }
+                for fp in forecast_points
             ]
             self.current_forecast_version = version
             
+            # Reload available versions
             with rx.session() as session:
                 forecast_versions = list(session.exec(
                     select(ProductionForecast.Version).where(
@@ -564,14 +583,20 @@ class ProductionState(rx.State):
             
             self._update_chart_data()
             
-            msg = f"Forecast v{version} saved with {len(forecast_points)} points"
+            # Calculate totals for message
+            total_qoil = sum(fp.q_oil for fp in forecast_points)
+            total_qliq = sum(fp.q_liq for fp in forecast_points)
+            
+            msg = f"Forecast v{version} saved: {len(forecast_points)} months, Qoil={total_qoil:.0f}t, Qliq={total_qliq:.0f}t"
             if self.has_planned_intervention:
-                msg += " (also saved to InterventionForecast v0)"
+                msg += " (+ InterventionForecast v0)"
             
             return rx.toast.success(msg)
             
         except Exception as e:
             print(f"Forecast error: {e}")
+            import traceback
+            traceback.print_exc()
             return rx.toast.error(f"Forecast failed: {str(e)}")
 
     def delete_forecast_version(self, version: int):
@@ -589,7 +614,6 @@ class ProductionState(rx.State):
                 )
                 session.commit()
                 
-                # Reload versions
                 forecast_versions = list(session.exec(
                     select(ProductionForecast.Version).where(
                         ProductionForecast.UniqueId == self.selected_unique_id
@@ -612,7 +636,6 @@ class ProductionState(rx.State):
             return rx.toast.error(f"Failed to delete: {str(e)}")
 
     def delete_current_forecast_version(self):
-        """Wrapper to delete current version."""
         return self.delete_forecast_version(self.current_forecast_version)
 
     # ========== Computed Properties ==========
@@ -662,7 +685,15 @@ class ProductionState(rx.State):
     @rx.var
     def forecast_table_data(self) -> list[dict]:
         return [
-            {"Date": f["date"], "OilRate": f"{f['oilRate']:.1f}", "LiqRate": f"{f['liqRate']:.1f}", "WC": f"{f['wc']:.1f}"}
+            {
+                "Date": f["date"], 
+                "OilRate": f"{f['oilRate']:.1f}", 
+                "LiqRate": f"{f['liqRate']:.1f}", 
+                "WC": f"{f['wc']:.1f}",
+                "WC_val": f['wc'],
+                "Qoil": f"{f['qOil']:.0f}",
+                "Qliq": f"{f['qLiq']:.0f}"
+            }
             for f in self.forecast_data
         ]
     
@@ -691,15 +722,15 @@ class ProductionState(rx.State):
         return "-"
     
     @rx.var
-    def completion_info_display(self) -> dict:
-        if self.selected_completion:
-            return {
-                "UniqueId": self.selected_completion.UniqueId,
-                "Wellname": self.selected_completion.WellName or "-",
-                "Reservoir": self.selected_completion.Reservoir or "-",
-                "Completion": self.selected_completion.Completion or "-",
-                "kh": f"{self.selected_completion.KH:.1f}" if self.selected_completion.KH else "-",
-                "Do": f"{self.selected_completion.Do:.4f}" if self.selected_completion.Do else "-",
-                "Dl": f"{self.selected_completion.Dl:.4f}" if self.selected_completion.Dl else "-"
-            }
-        return {}
+    def forecast_totals_display(self) -> str:
+        """Display total cumulative production from forecast."""
+        if not self.forecast_data:
+            return "No forecast"
+        total_qoil = sum(f["qOil"] for f in self.forecast_data)
+        total_qliq = sum(f["qLiq"] for f in self.forecast_data)
+        return f"Total: Qoil={total_qoil:.0f}t | Qliq={total_qliq:.0f}t"
+    
+    @rx.var
+    def k_month_loaded(self) -> bool:
+        """Check if KMonth data is loaded."""
+        return len(self.k_month_data) > 0
