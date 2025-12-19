@@ -8,28 +8,16 @@ from .gtm_dialogs import update_gtm_dialog, delete_gtm_dialog
 def show_intervention(gtm: Intervention) -> rx.Component:
     """Show an intervention in a table row with edit/delete buttons."""
     return rx.table.row(
-        rx.table.cell(
-            rx.text(gtm.UniqueId, size="1", weight="medium"),
-        ),
+        rx.table.cell(rx.text(gtm.UniqueId, size="1", weight="medium")),
         rx.table.cell(rx.text(gtm.Field, size="1")),
         rx.table.cell(rx.text(gtm.Platform, size="1")),
         rx.table.cell(rx.text(gtm.Reservoir, size="1")),
-        rx.table.cell(
-            rx.badge(gtm.TypeGTM, color_scheme="blue", size="1")
-        ),
+        rx.table.cell(rx.badge(gtm.TypeGTM, color_scheme="blue", size="1")),
         rx.table.cell(rx.text(gtm.PlanningDate, size="1")),
         rx.table.cell(
             rx.badge(
                 gtm.Status,
-                color_scheme=rx.cond(
-                    gtm.Status == "Done",
-                    "green",
-                    rx.cond(
-                        gtm.Status == "In Progress",
-                        "yellow",
-                        "gray"
-                    )
-                ),
+                color_scheme=rx.cond(gtm.Status == "Done", "green", rx.cond(gtm.Status == "In Progress", "yellow", "gray")),
                 size="1"
             )
         ),
@@ -39,13 +27,7 @@ def show_intervention(gtm: Intervention) -> rx.Component:
         rx.table.cell(rx.text(f"{gtm.InitialLRate:.0f}", size="1")),
         rx.table.cell(rx.text(f"{gtm.bl:.2f}", size="1")),
         rx.table.cell(rx.text(f"{gtm.Dil:.3f}", size="1")),
-        rx.table.cell(
-            rx.hstack(
-                update_gtm_dialog(gtm),
-                delete_gtm_dialog(gtm),
-                spacing="1",
-            ),
-        ),
+        rx.table.cell(rx.hstack(update_gtm_dialog(gtm), delete_gtm_dialog(gtm), spacing="1")),
         style={"_hover": {"bg": rx.color("gray", 3)}},
         align="center",
     )
@@ -54,7 +36,6 @@ def show_intervention(gtm: Intervention) -> rx.Component:
 def gtm_table() -> rx.Component:
     """Create the main data table for interventions."""
     return rx.box(
-        
         rx.table.root(
             rx.table.header(
                 rx.table.row(
@@ -74,9 +55,7 @@ def gtm_table() -> rx.Component:
                     rx.table.column_header_cell(rx.text("Actions", size="1", weight="bold")),
                 ),
             ),
-            rx.table.body(
-                rx.foreach(GTMState.GTM, show_intervention),
-            ),
+            rx.table.body(rx.foreach(GTMState.GTM, show_intervention)),
             variant="surface",
             size="1",
             width="100%",
@@ -89,11 +68,7 @@ def gtm_table() -> rx.Component:
 
 
 def production_record_table() -> rx.Component:
-    """Table showing production records from HistoryProd for selected intervention.
-    
-    Displays the last 24 records (or all if fewer) with calculated Water Cut (WC).
-    Data is filtered to last 5 years from HistoryProd table.
-    """
+    """Table showing production records from HistoryProd for selected intervention."""
     return rx.box(
         rx.table.root(
             rx.table.header(
@@ -114,15 +89,7 @@ def production_record_table() -> rx.Component:
                         rx.table.cell(
                             rx.badge(
                                 row["WC"],
-                                color_scheme=rx.cond(
-                                    row["WC"].to(float) > 80,
-                                    "red",
-                                    rx.cond(
-                                        row["WC"].to(float) > 50,
-                                        "yellow",
-                                        "green"
-                                    )
-                                ),
+                                color_scheme=rx.cond(row["WC"].to(float) > 80, "red", rx.cond(row["WC"].to(float) > 50, "yellow", "green")),
                                 size="1"
                             )
                         ),
@@ -135,13 +102,13 @@ def production_record_table() -> rx.Component:
             width="100%",
         ),
         overflow_y="auto",
-        max_height="250px",  # Increased height to show up to 24 records
+        max_height="250px",
         width="100%",
     )
 
 
 def forecast_result_table() -> rx.Component:
-    """Table showing forecast results."""
+    """Table showing forecast results with cumulative production."""
     return rx.box(
         rx.table.root(
             rx.table.header(
@@ -149,6 +116,8 @@ def forecast_result_table() -> rx.Component:
                     rx.table.column_header_cell(rx.text("Date", size="1", weight="bold")),
                     rx.table.column_header_cell(rx.text("Oil Rate", size="1", weight="bold")),
                     rx.table.column_header_cell(rx.text("Liq Rate", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("Qoil (t)", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("Qliq (t)", size="1", weight="bold")),
                 ),
             ),
             rx.table.body(
@@ -158,6 +127,8 @@ def forecast_result_table() -> rx.Component:
                         rx.table.cell(rx.text(row["Date"], size="1")),
                         rx.table.cell(rx.text(row["OilRate"], size="1")),
                         rx.table.cell(rx.text(row["LiqRate"], size="1")),
+                        rx.table.cell(rx.badge(row["Qoil"], color_scheme="green", size="1")),
+                        rx.table.cell(rx.badge(row["Qliq"], color_scheme="blue", size="1")),
                         style={"_hover": {"bg": rx.color("blue", 2)}},
                     )
                 ),
@@ -173,21 +144,34 @@ def forecast_result_table() -> rx.Component:
 
 
 def history_stats_card() -> rx.Component:
-    """Display statistics about loaded history data."""
+    """Display statistics about loaded history data and KMonth status."""
     return rx.card(
         rx.hstack(
             rx.vstack(
-                rx.text("Records Loaded", size="1", color=rx.color("gray", 10)),
+                rx.text("Records", size="1", color=rx.color("gray", 10)),
                 rx.text(GTMState.history_record_count, weight="bold", size="3"),
                 spacing="0",
                 align="start",
             ),
             rx.divider(orientation="vertical", size="2"),
             rx.vstack(
-                rx.text("Date Range (5 years)", size="1", color=rx.color("gray", 10)),
+                rx.text("Date Range (5Y)", size="1", color=rx.color("gray", 10)),
                 rx.text(GTMState.date_range_display, size="2"),
                 spacing="0",
                 align="start",
+            ),
+            rx.divider(orientation="vertical", size="2"),
+            rx.vstack(
+                rx.text("Forecast Totals", size="1", color=rx.color("gray", 10)),
+                rx.text(GTMState.forecast_totals_display, size="2"),
+                spacing="0",
+                align="start",
+            ),
+            rx.divider(orientation="vertical", size="2"),
+            rx.cond(
+                GTMState.k_month_loaded,
+                rx.hstack(rx.icon("check-circle", size=14, color=rx.color("green", 9)), rx.text("KMonth OK", size="1"), spacing="1"),
+                rx.hstack(rx.icon("alert-circle", size=14, color=rx.color("yellow", 9)), rx.text("KMonth N/A", size="1"), spacing="1"),
             ),
             spacing="4",
             width="100%",
