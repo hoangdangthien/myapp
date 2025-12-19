@@ -9,7 +9,7 @@ def form_field(
     name: str,
     default_value: str = "",
     required: bool = True,
-    step: str = "any",  # Add step parameter for number inputs
+    step: str = "0.00001",  # Add step parameter for number inputs
 ) -> rx.Component:
     """Create a reusable form field component.
     
