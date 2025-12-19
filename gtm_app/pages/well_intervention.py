@@ -41,7 +41,7 @@ def intervention_table_section() -> rx.Component:
 
 
 def forecast_controls() -> rx.Component:
-    """Forecast control panel with date input, version selector, and button."""
+    """Forecast control panel with date input, version selector, and buttons."""
     return rx.hstack(
         rx.vstack(
             rx.text("Intervention ID:", size="1", weight="bold"),
@@ -70,6 +70,14 @@ def forecast_controls() -> rx.Component:
             on_click=GTMState.run_forecast,
             size="1",
         ),
+        rx.button(
+            rx.icon("git-branch", size=16),
+            rx.text("Gen Base", size="2"),
+            on_click=GTMState.generate_base_forecast,
+            size="1",
+            variant="soft",
+            color_scheme="gray",
+        ),
         spacing="3",
         align="end",
     )
@@ -88,11 +96,11 @@ def forecast_version_selector() -> rx.Component:
                 size="1",
                 width="80px",
             ),
-            #rx.badge(
-                #f"{GTMState.available_forecast_versions.length()}/3 versions",
-                #color_scheme="gray",
-                #size="1",
-            #),
+            rx.cond(
+                GTMState.has_base_forecast,
+                rx.badge("Base v0 ✓", color_scheme="gray", size="1"),
+                rx.badge("No Base", color_scheme="yellow", size="1"),
+            ),
             spacing="2",
             align="center",
         ),
@@ -214,7 +222,12 @@ def forecast_section() -> rx.Component:
                         #rx.text("Forecast Results", size="2", weight="bold"),
                         rx.cond(
                             GTMState.current_forecast_version > 0,
-                            rx.badge(f"Forecast Results v{GTMState.current_forecast_version}", color_scheme="green", size="2"),
+                            rx.badge(f"Intervention Forecast v{GTMState.current_forecast_version}", color_scheme="green", size="2"),
+                            rx.fragment(),
+                        ),
+                        rx.cond(
+                            GTMState.has_base_forecast,
+                            rx.badge("Base v0", color_scheme="gray", size="2"),
                             rx.fragment(),
                         ),
                         spacing="2",
@@ -253,8 +266,15 @@ def well_intervention_page() -> rx.Component:
     - Production data from HistoryProd table (last 5 years)
     - Water Cut (WC) calculated as: WC = (Liqrate - Oilrate) / Liqrate * 100
     - Forecast versioning: Saves up to 3 forecast versions per intervention (FIFO)
+    - Base forecast (v0): Production decline WITHOUT intervention for comparison
     - Version selector: Switch between different forecast versions
     - Auto-save: Forecasts automatically saved to InterventionProd table
+    
+    Base Forecast (Version 0):
+    - Represents what would happen if NO intervention was performed
+    - Generated from last history record using natural decline parameters
+    - Used as baseline comparison for intervention effectiveness
+    - Shows intervention gain/loss in cumulative production
     """
     return rx.vstack(
         # Page Header

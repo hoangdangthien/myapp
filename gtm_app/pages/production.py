@@ -7,6 +7,8 @@ from ..components.production_components import (
     completion_table,
     completion_stats_summary,
     selected_completion_info,
+)
+from ..components.production_tables import (
     forecast_controls,
     production_history_table,
     forecast_result_table,
@@ -102,18 +104,15 @@ def production_page() -> rx.Component:
     - Load HistoryProd data (last 5 years) for selected completion
     - Run Exponential DCA forecast: q(t) = qi * exp(-Di * t)
       - qi: Last rate from HistoryProd
-      - Di: Decline rate from CompletionID.Decline
+      - Di: Decline rate from CompletionID.Do/Dl
+    - Uses KMonth table for uptime factors
+    - Cumulative: Qoil = K_oil * days_in_month * OilRate
     - Save forecasts to ProductionForecast table (max 4 versions, FIFO)
     - If UniqueId has planned intervention in InterventionID,
-      also save forecast to InterventionProd as version 0
-    - Version selector to switch between saved forecasts
-    - Production rate vs time chart with actual + forecast
+      also save forecast to InterventionForecast as version 0
     
     DCA Formula: q(t) = qi * exp(-Di * t)
-    Where:
-    - qi = Initial rate (last production rate from history)
-    - Di = Decline rate (from CompletionID.Decline)
-    - t = Time in months
+    Cumulative: Q = K * days_in_month * rate
     """
     return rx.vstack(
         # Page Header
@@ -121,7 +120,7 @@ def production_page() -> rx.Component:
             rx.vstack(
                 rx.heading("Production Monitoring", size="6"),
                 rx.text(
-                    "Exponential Decline Curve Analysis (DCA)",
+                    "Exponential Decline Curve Analysis (DCA) with KMonth Integration",
                     size="2",
                     color=rx.color("gray", 10)
                 ),
@@ -166,12 +165,12 @@ def production_page() -> rx.Component:
             rx.hstack(
                 rx.icon("info", size=16, color=rx.color("blue", 9)),
                 rx.vstack(
-                    rx.text("Exponential Decline Curve Analysis", weight="bold", size="2"),
+                    rx.text("Exponential Decline Curve Analysis with KMonth", weight="bold", size="2"),
                     rx.text(
                         "Formula: q(t) = qi × exp(-Di × t) | "
-                        "qi = Last production rate from history | "
-                        "Di = Decline rate from CompletionID | "
-                        "Forecast saved to ProductionForecast (max 4 versions)",
+                        "Cumulative: Q = K × days × rate | "
+                        "K factors from KMonth table per month | "
+                        "Dates generated with pandas date_range(freq='MS')",
                         size="1",
                         color=rx.color("gray", 10)
                     ),
