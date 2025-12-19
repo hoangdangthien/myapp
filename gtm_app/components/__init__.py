@@ -10,10 +10,15 @@ from .production_components import (
     completion_stats_summary,
     selected_completion_info,
     forecast_version_selector,
-)
-from .production_tables import (
+    update_completion_dialog,
     forecast_controls,
     production_history_table,
     forecast_result_table as prod_forecast_result_table,
     production_rate_chart as prod_production_rate_chart,
+)
+from .production_tables import (
+    forecast_controls as prod_tables_forecast_controls,
+    production_history_table as prod_tables_history_table,
+    forecast_result_table as prod_tables_forecast_table,
+    production_rate_chart as prod_tables_rate_chart,
 )

@@ -2,6 +2,7 @@
 import reflex as rx
 from ..states.production_state import ProductionState
 from ..models import CompletionID
+from .form_fields import form_field
 
 
 def completion_filter_controls() -> rx.Component:
@@ -24,6 +25,126 @@ def completion_filter_controls() -> rx.Component:
         ),
         spacing="2",
         align="center",
+    )
+
+
+def update_completion_dialog(completion: CompletionID) -> rx.Component:
+    """Dialog for editing CompletionID decline parameters (Do and Dl only)."""
+    return rx.dialog.root(
+        rx.dialog.trigger(
+            rx.button(
+                rx.icon("pencil", size=14),
+                variant="ghost",
+                color_scheme="blue",
+                size="1",
+                on_click=lambda: ProductionState.get_completion(completion),
+            ),
+        ),
+        rx.dialog.content(
+            rx.dialog.title("Edit Decline Parameters"),
+            rx.dialog.description(
+                rx.vstack(
+                    rx.text(f"UniqueId: ", weight="bold", size="2", as_="span"),
+                    rx.text(completion.UniqueId, size="2", as_="span"),
+                    rx.text(f"Well: ", weight="bold", size="2", as_="span"),
+                    rx.text(
+                        rx.cond(completion.WellName, completion.WellName, "-"),
+                        size="2",
+                        as_="span"
+                    ),
+                    rx.text(f"Reservoir: ", weight="bold", size="2", as_="span"),
+                    rx.badge(
+                        rx.cond(completion.Reservoir, completion.Reservoir, "-"),
+                        color_scheme="blue",
+                        size="1"
+                    ),
+                    direction="row",
+                    spacing="2",
+                    wrap="wrap",
+                )
+            ),
+            rx.form(
+                rx.flex(
+                    rx.text("Decline Rate Parameters (1/year)", size="2", weight="bold", color=rx.color("gray", 11)),
+                    rx.grid(
+                        rx.flex(
+                            rx.text("Do (Oil Decline)", size="2", weight="bold"),
+                            rx.input(
+                                placeholder="Enter oil decline rate",
+                                type="number",
+                                name="Do",
+                                default_value=completion.Do.to(str),
+                                step="0.0001",
+                                width="100%",
+                            ),
+                            rx.text("Current: ", size="1", color=rx.color("gray", 10), as_="span"),
+                            rx.text(
+                                rx.cond(
+                                    completion.Do,
+                                    completion.Do.to(str),
+                                    "0"
+                                ),
+                                size="1",
+                                weight="medium",
+                                as_="span"
+                            ),
+                            direction="column",
+                            spacing="1",
+                            width="100%",
+                        ),
+                        rx.flex(
+                            rx.text("Dl (Liquid Decline)", size="2", weight="bold"),
+                            rx.input(
+                                placeholder="Enter liquid decline rate",
+                                type="number",
+                                name="Dl",
+                                default_value=completion.Dl.to(str),
+                                step="0.0001",
+                                width="100%",
+                            ),
+                            rx.text("Current: ", size="1", color=rx.color("gray", 10), as_="span"),
+                            rx.text(
+                                rx.cond(
+                                    completion.Dl,
+                                    completion.Dl.to(str),
+                                    "0"
+                                ),
+                                size="1",
+                                weight="medium",
+                                as_="span"
+                            ),
+                            direction="column",
+                            spacing="1",
+                            width="100%",
+                        ),
+                        columns="2",
+                        spacing="4",
+                        width="100%",
+                    ),
+                    rx.callout(
+                        rx.text("These decline rates are used in the Exponential DCA formula: q(t) = qi × exp(-Di × t)", size="1"),
+                        icon="info",
+                        color_scheme="blue",
+                        size="1",
+                    ),
+                    rx.flex(
+                        rx.dialog.close(
+                            rx.button("Cancel", variant="soft", color_scheme="gray"),
+                        ),
+                        rx.dialog.close(
+                            rx.button("Update", type="submit", color_scheme="blue"),
+                        ),
+                        spacing="3",
+                        justify="end",
+                    ),
+                    direction="column",
+                    spacing="4",
+                ),
+                on_submit=ProductionState.update_completion,
+                reset_on_submit=False,
+            ),
+            max_width="450px",
+        ),
     )
 
 
@@ -84,6 +205,9 @@ def show_completion_row(completion: CompletionID) -> rx.Component:
                 size="1"
             ),
         ),
+        rx.table.cell(
+            update_completion_dialog(completion),
+        ),
         style={"_hover": {"bg": rx.color("gray", 3)}, "cursor": "pointer"},
         align="center",
         on_click=lambda: ProductionState.set_selected_unique_id(completion.UniqueId),
@@ -103,6 +227,7 @@ def completion_table() -> rx.Component:
                     rx.table.column_header_cell(rx.text("KH", size="1", weight="bold")),
                     rx.table.column_header_cell(rx.text("Doil", size="1", weight="bold")),
                     rx.table.column_header_cell(rx.text("Dliq", size="1", weight="bold")),
+                    rx.table.column_header_cell(rx.text("Actions", size="1", weight="bold")),
                 ),
             ),
             rx.table.body(

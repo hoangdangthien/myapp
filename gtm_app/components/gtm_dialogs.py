@@ -15,7 +15,7 @@ from .form_fields import form_field, select_field
 GTM_CATEGORY_OPTIONS = [
     "Using Drilling Platform",
     "Not Using Platform",
-    "Subsea",
+    "Exploration well",
     "Other"
 ]
 
