@@ -45,6 +45,9 @@ class ProductionState(rx.State):
     selected_unique_id: str = ""
     available_unique_ids: list[str] = []
     
+    # Current completion for editing
+    current_completion: Optional[CompletionID] = None
+    
     # History production data (last 5 years)
     history_prod: list[dict] = []
     
@@ -133,10 +136,6 @@ class ProductionState(rx.State):
 
     def load_completions(self):
         """Load all completions from CompletionID table."""
-        if self._all_completions:
-            self._apply_filters()
-            return
-            
         try:
             self.is_loading_completions = True
             
@@ -182,6 +181,67 @@ class ProductionState(rx.State):
     def filter_by_reservoir(self, reservoir: str):
         self.selected_reservoir = reservoir if reservoir != "All Reservoirs" else ""
         self._apply_filters()
+
+    def get_completion(self, completion: CompletionID):
+        """Set current completion for editing."""
+        self.current_completion = completion
+
+    def update_completion(self, form_data: dict):
+        """Update CompletionID Do and Dl fields in database."""
+        try:
+            if not self.current_completion:
+                return rx.toast.error("No completion selected for update")
+            
+            unique_id = self.current_completion.UniqueId
+            
+            with rx.session() as session:
+                completion_to_update = session.exec(
+                    select(CompletionID).where(
+                        CompletionID.UniqueId == unique_id
+                    )
+                ).first()
+                
+                if not completion_to_update:
+                    return rx.toast.error(f"Completion '{unique_id}' not found")
+                
+                # Update Do (oil decline rate)
+                do_value = form_data.get("Do")
+                if do_value is not None and str(do_value).strip() != "":
+                    try:
+                        completion_to_update.Do = float(do_value)
+                    except (ValueError, TypeError) as e:
+                        print(f"Warning: Could not convert Do='{do_value}' to float: {e}")
+                
+                # Update Dl (liquid decline rate)
+                dl_value = form_data.get("Dl")
+                if dl_value is not None and str(dl_value).strip() != "":
+                    try:
+                        completion_to_update.Dl = float(dl_value)
+                    except (ValueError, TypeError) as e:
+                        print(f"Warning: Could not convert Dl='{dl_value}' to float: {e}")
+                
+                session.add(completion_to_update)
+                session.commit()
+                session.refresh(completion_to_update)
+                self.current_completion = completion_to_update
+            
+            # Reload completions to reflect changes
+            self._all_completions = []  # Clear cache to force reload
+            self.load_completions()
+            
+            # Update selected completion if it was the one updated
+            if self.selected_unique_id == unique_id:
+                self.selected_completion = self.current_completion
+                self.dio = self.current_completion.Do if self.current_completion.Do else 0.0
+                self.dil = self.current_completion.Dl if self.current_completion.Dl else 0.0
+            
+            return rx.toast.success(f"Completion '{unique_id}' updated: Do={completion_to_update.Do}, Dl={completion_to_update.Dl}")
+            
+        except Exception as e:
+            print(f"Update error: {e}")
+            import traceback
+            traceback.print_exc()
+            return rx.toast.error(f"Failed to update completion: {str(e)}")
 
     def set_selected_unique_id(self, unique_id: str):
         """Set selected completion and trigger data load."""

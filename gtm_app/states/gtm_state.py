@@ -34,6 +34,11 @@ class GTMState(rx.State):
     - t = Elapsed days from start
     
     For interventions: Qoil = OilRate * K_int * days_in_month
+    
+    Base Forecast (Version 0):
+    - Represents production decline WITHOUT intervention
+    - Generated from last history record using CompletionID decline parameters
+    - Used as baseline comparison for intervention effectiveness
     """
     
     # List of all interventions
@@ -60,10 +65,13 @@ class GTMState(rx.State):
     # Forecast parameters
     forecast_end_date: str = ""
     
-    # Forecast results
+    # Forecast results (intervention forecast - versions 1,2,3)
     forecast_data: list[dict] = []
     
-    # Chart data combining actual + forecast
+    # Base forecast data (version 0 - without intervention)
+    base_forecast_data: list[dict] = []
+    
+    # Chart data combining actual + forecast + base forecast
     chart_data: list[dict] = []
     
     # Intervention date for vertical line
@@ -79,6 +87,7 @@ class GTMState(rx.State):
     show_oil: bool = True
     show_liquid: bool = True
     show_wc: bool = True
+    show_base_forecast: bool = True  # Toggle for base forecast visibility
     
     # Search/filter state
     search_value: str = ""
@@ -96,6 +105,9 @@ class GTMState(rx.State):
     # Intervention uses Hyperbolic by default (considers b parameter)
     use_exponential_dca: bool = False
     
+    # Base forecast status
+    has_base_forecast: bool = False
+    
     def set_add_dialog_open(self, is_open: bool):
         self.add_dialog_open = is_open
     
@@ -107,6 +119,10 @@ class GTMState(rx.State):
     
     def toggle_wc(self, checked: bool):
         self.show_wc = checked
+    
+    def toggle_base_forecast(self, checked: bool):
+        """Toggle base forecast (version 0) visibility on chart."""
+        self.show_base_forecast = checked
 
     def load_k_month_data(self):
         """Load KMonth data from database and cache it."""
@@ -169,6 +185,8 @@ class GTMState(rx.State):
         if not self.selected_id:
             self.history_prod = []
             self.chart_data = []
+            self.base_forecast_data = []
+            self.has_base_forecast = False
             return
             
         try:
@@ -200,7 +218,7 @@ class GTMState(rx.State):
                         "Dayon": rec.Dayon if rec.Dayon else 0.0
                     })
                 
-                # Load available forecast versions
+                # Load available forecast versions (excluding version 0 for selector)
                 forecast_versions = session.exec(
                     select(InterventionForecast.Version).where(
                         InterventionForecast.UniqueId == self.selected_id,
@@ -208,6 +226,15 @@ class GTMState(rx.State):
                     ).distinct()
                 ).all()
                 self.available_forecast_versions = sorted(forecast_versions)
+                
+                # Check if base forecast (version 0) exists
+                base_exists = session.exec(
+                    select(InterventionForecast).where(
+                        InterventionForecast.UniqueId == self.selected_id,
+                        InterventionForecast.Version == 0
+                    ).limit(1)
+                ).first()
+                self.has_base_forecast = base_exists is not None
             
             # Get intervention date
             selected_gtm = next(
@@ -216,6 +243,9 @@ class GTMState(rx.State):
             if selected_gtm:
                 self.intervention_date = selected_gtm.PlanningDate
                 self.current_gtm = selected_gtm
+            
+            # Load base forecast (version 0)
+            self.load_base_forecast_from_db()
             
             if self.available_forecast_versions:
                 self.current_forecast_version = max(self.available_forecast_versions)
@@ -228,6 +258,40 @@ class GTMState(rx.State):
         except Exception as e:
             print(f"Error loading production data: {e}")
             self.history_prod = []
+    
+    def load_base_forecast_from_db(self):
+        """Load base forecast (version 0) from database."""
+        if not self.selected_id:
+            self.base_forecast_data = []
+            self.has_base_forecast = False
+            return
+            
+        try:
+            with rx.session() as session:
+                base_records = session.exec(
+                    select(InterventionForecast).where(
+                        InterventionForecast.UniqueId == self.selected_id,
+                        InterventionForecast.Version == 0
+                    ).order_by(InterventionForecast.Date)
+                ).all()
+                
+                self.base_forecast_data = [
+                    {
+                        "date": rec.Date.strftime("%Y-%m-%d") if isinstance(rec.Date, datetime) else str(rec.Date),
+                        "oilRate": rec.OilRate,
+                        "liqRate": rec.LiqRate,
+                        "qOil": rec.Qoil,
+                        "qLiq": rec.Qliq,
+                        "wc": rec.WC
+                    }
+                    for rec in base_records
+                ]
+                self.has_base_forecast = len(self.base_forecast_data) > 0
+                
+        except Exception as e:
+            print(f"Error loading base forecast from DB: {e}")
+            self.base_forecast_data = []
+            self.has_base_forecast = False
     
     def load_forecast_from_db(self):
         """Load forecast data for current version from database."""
@@ -269,9 +333,10 @@ class GTMState(rx.State):
         self.load_gtms()
     
     def update_chart_data(self):
-        """Update chart data combining actual history and forecast with Water Cut."""
+        """Update chart data combining actual history, intervention forecast, and base forecast."""
         chart_points = []
         
+        # Add actual history data
         sorted_history = sorted(self.history_prod, key=lambda x: x["Date"])
         for prod in sorted_history:
             date_val = prod["Date"]
@@ -284,6 +349,7 @@ class GTMState(rx.State):
                 "type": "actual"
             })
         
+        # Add intervention forecast data (versions 1,2,3)
         for fc in self.forecast_data:
             wc_forecast = calculate_water_cut(fc["oilRate"], fc["liqRate"])
             
@@ -295,12 +361,42 @@ class GTMState(rx.State):
                 "type": "forecast"
             })
         
+        # Add base forecast data (version 0 - without intervention)
+        for bf in self.base_forecast_data:
+            wc_base = calculate_water_cut(bf["oilRate"], bf["liqRate"])
+            
+            # Check if this date already exists in chart_points
+            existing_point = next(
+                (p for p in chart_points if p["date"] == bf["date"]), 
+                None
+            )
+            
+            if existing_point:
+                # Add base forecast to existing point
+                existing_point["oilRateBase"] = bf["oilRate"]
+                existing_point["liqRateBase"] = bf["liqRate"]
+                existing_point["wcBase"] = round(wc_base, 2)
+            else:
+                # Create new point for base forecast
+                chart_points.append({
+                    "date": bf["date"],
+                    "oilRateBase": bf["oilRate"],
+                    "liqRateBase": bf["liqRate"],
+                    "wcBase": round(wc_base, 2),
+                    "type": "base_forecast"
+                })
+        
+        # Sort by date
+        chart_points.sort(key=lambda x: x["date"])
+        
         self.chart_data = chart_points
 
     def set_selected_id(self, id_value: str):
         self.selected_id = id_value
         self.forecast_data = []
+        self.base_forecast_data = []
         self.current_forecast_version = 0
+        self.has_base_forecast = False
         self.load_production_data()
 
     def set_forecast_end_date(self, date: str):
@@ -342,12 +438,24 @@ class GTMState(rx.State):
     def _save_forecast_to_db(
         self, 
         unique_id: str, 
-        forecast_points: list[ForecastPoint]
+        forecast_points: list[ForecastPoint],
+        version: int = None
     ) -> int:
         """Save forecast data to InterventionForecast table with version control."""
         try:
             with rx.session() as session:
-                version = self._get_next_forecast_version(session, unique_id)
+                if version is None:
+                    version = self._get_next_forecast_version(session, unique_id)
+                else:
+                    # Delete existing data for this version
+                    session.exec(
+                        delete(InterventionForecast).where(
+                            InterventionForecast.UniqueId == unique_id,
+                            InterventionForecast.Version == version
+                        )
+                    )
+                    session.commit()
+                
                 created_at = datetime.now()
                 
                 for fp in forecast_points:
@@ -371,6 +479,105 @@ class GTMState(rx.State):
         except Exception as e:
             print(f"Error saving forecast to DB: {e}")
             raise
+
+    def generate_base_forecast(self):
+        """Generate base forecast (version 0) - production decline WITHOUT intervention.
+        
+        Uses last history record as starting point with decline parameters.
+        This represents what would happen if NO intervention was performed.
+        """
+        if not self.history_prod:
+            return rx.toast.error("No production history available to generate base forecast")
+        
+        if not self.forecast_end_date:
+            return rx.toast.error("Please set forecast end date first")
+        
+        try:
+            # Get last production record
+            sorted_prod = sorted(self.history_prod, key=lambda x: x["Date"])
+            last_prod = sorted_prod[-1]
+            
+            if isinstance(last_prod["Date"], datetime):
+                start_date = last_prod["Date"]
+            else:
+                start_date = datetime.strptime(str(last_prod["Date"]), "%Y-%m-%d")
+            
+            end_date = datetime.strptime(self.forecast_end_date, "%Y-%m-%d")
+            
+            if end_date <= start_date:
+                return rx.toast.error(f"End date must be after {start_date.strftime('%Y-%m-%d')}")
+            
+            # Use last actual rates as starting point
+            qi_oil = last_prod["OilRate"]
+            qi_liq = last_prod["LiqRate"]
+            
+            # Get decline parameters from current GTM or use defaults
+            # Base forecast uses lower decline rate (natural decline without intervention)
+            if self.current_gtm:
+                # Use a fraction of intervention decline rate for natural decline
+                di_oil = self.current_gtm.Dio * 0.5 if self.current_gtm.Dio else 0.1
+                di_liq = self.current_gtm.Dil * 0.5 if self.current_gtm.Dil else 0.1
+                b_oil = 0.0  # Exponential for base case
+                b_liq = 0.0
+            else:
+                di_oil = 0.1
+                di_liq = 0.1
+                b_oil = 0.0
+                b_liq = 0.0
+            
+            # Ensure KMonth data is loaded
+            if not self.k_month_data:
+                self.load_k_month_data()
+            
+            # Generate base forecast using exponential decline
+            forecast_points = run_dca_forecast_intervention(
+                start_date=start_date,
+                end_date=end_date,
+                qi_oil=qi_oil,
+                di_oil=di_oil,
+                b_oil=b_oil,
+                qi_liq=qi_liq,
+                di_liq=di_liq,
+                b_liq=b_liq,
+                k_month_data=self.k_month_data,
+                use_exponential=True  # Base case always uses exponential
+            )
+            
+            if not forecast_points:
+                return rx.toast.error("No base forecast points generated")
+            
+            # Save as version 0
+            self._save_forecast_to_db(self.selected_id, forecast_points, version=0)
+            
+            # Update state
+            self.base_forecast_data = [
+                {
+                    "date": fp.date.strftime("%Y-%m-%d"),
+                    "oilRate": fp.oil_rate,
+                    "liqRate": fp.liq_rate,
+                    "qOil": fp.q_oil,
+                    "qLiq": fp.q_liq,
+                    "wc": fp.wc
+                }
+                for fp in forecast_points
+            ]
+            self.has_base_forecast = True
+            
+            self.update_chart_data()
+            
+            total_qoil = sum(fp.q_oil for fp in forecast_points)
+            total_qliq = sum(fp.q_liq for fp in forecast_points)
+            
+            return rx.toast.success(
+                f"Base forecast (v0) generated: {len(forecast_points)} months, "
+                f"Qoil={total_qoil:.0f}t, Qliq={total_qliq:.0f}t"
+            )
+            
+        except Exception as e:
+            print(f"Base forecast error: {e}")
+            import traceback
+            traceback.print_exc()
+            return rx.toast.error(f"Base forecast failed: {str(e)}")
 
     def run_forecast(self):
         """Run Arps decline curve forecast using elapsed days pattern.
@@ -468,6 +675,10 @@ class GTMState(rx.State):
                 ).all()
                 self.available_forecast_versions = sorted(forecast_versions)
             
+            # Also generate base forecast if not exists
+            if not self.has_base_forecast:
+                self.generate_base_forecast()
+            
             self.update_chart_data()
             
             # Calculate totals for message
@@ -509,6 +720,28 @@ class GTMState(rx.State):
         except Exception as e:
             print(f"Delete forecast error: {e}")
             return rx.toast.error(f"Failed to delete forecast: {str(e)}")
+
+    def delete_base_forecast(self):
+        """Delete base forecast (version 0)."""
+        try:
+            with rx.session() as session:
+                session.exec(
+                    delete(InterventionForecast).where(
+                        InterventionForecast.UniqueId == self.selected_id,
+                        InterventionForecast.Version == 0
+                    )
+                )
+                session.commit()
+            
+            self.base_forecast_data = []
+            self.has_base_forecast = False
+            self.update_chart_data()
+            
+            return rx.toast.success("Base forecast (v0) deleted")
+            
+        except Exception as e:
+            print(f"Delete base forecast error: {e}")
+            return rx.toast.error(f"Failed to delete base forecast: {str(e)}")
 
     async def handle_excel_upload(self, files: list[rx.UploadFile]):
         """Handle Excel file upload for interventions."""
@@ -759,6 +992,20 @@ class GTMState(rx.State):
         ]
     
     @rx.var
+    def base_forecast_table_data(self) -> list[dict]:
+        """Get base forecast data formatted for table display."""
+        return [
+            {
+                "Date": f["date"],
+                "OilRate": f"{f['oilRate']:.1f}",
+                "LiqRate": f"{f['liqRate']:.1f}",
+                "Qoil": f"{f.get('qOil', 0):.0f}",
+                "Qliq": f"{f.get('qLiq', 0):.0f}"
+            }
+            for f in self.base_forecast_data[:12]
+        ]
+    
+    @rx.var
     def forecast_version_options(self) -> list[str]:
         return [f"v{v}" for v in self.available_forecast_versions]
     
@@ -796,6 +1043,30 @@ class GTMState(rx.State):
         total_qoil = sum(f.get("qOil", 0) for f in self.forecast_data)
         total_qliq = sum(f.get("qLiq", 0) for f in self.forecast_data)
         return f"Total: Qoil={total_qoil:.0f}t | Qliq={total_qliq:.0f}t"
+    
+    @rx.var
+    def base_forecast_totals_display(self) -> str:
+        """Display total cumulative production from base forecast."""
+        if not self.base_forecast_data:
+            return "No base forecast"
+        total_qoil = sum(f.get("qOil", 0) for f in self.base_forecast_data)
+        total_qliq = sum(f.get("qLiq", 0) for f in self.base_forecast_data)
+        return f"Base: Qoil={total_qoil:.0f}t | Qliq={total_qliq:.0f}t"
+    
+    @rx.var
+    def intervention_gain_display(self) -> str:
+        """Display gain from intervention (forecast vs base)."""
+        if not self.forecast_data or not self.base_forecast_data:
+            return ""
+        
+        forecast_qoil = sum(f.get("qOil", 0) for f in self.forecast_data)
+        base_qoil = sum(f.get("qOil", 0) for f in self.base_forecast_data)
+        gain = forecast_qoil - base_qoil
+        
+        if gain > 0:
+            return f"+{gain:.0f}t oil gain"
+        else:
+            return f"{gain:.0f}t oil"
     
     @rx.var
     def k_month_loaded(self) -> bool:
