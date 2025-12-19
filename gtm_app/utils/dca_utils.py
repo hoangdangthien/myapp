@@ -1,24 +1,28 @@
 """DCA (Decline Curve Analysis) utility functions.
 
 This module provides:
-- Arps decline curve functions (exponential, hyperbolic, harmonic)
-- Date range generation with pandas
+- Arps decline curve functions using daily elapsed time
+- Date range generation with pandas (freq="MS")
 - KMonth integration for cumulative production calculation
-- Elapsed days calculation per month
+- Elapsed days calculation from start date
+
+Key Formula:
+- Exponential: q(t) = qi * exp(-di * 12/365 * t) where t is elapsed days
+- Cumulative: Qoil = OilRate * K * days_in_month
 """
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from typing import Tuple, List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 
 
 @dataclass
 class ArpsParameters:
     """Arps decline curve parameters."""
-    qi: float  # Initial rate
-    di: float  # Initial decline rate (1/month)
-    b: float = 0.0  # Decline exponent (0=exponential, 0<b<1=hyperbolic, b=1=harmonic)
+    qi: float  # Initial rate (t/day)
+    di: float  # Decline rate (1/year, typically 0.01-0.5)
+    b: float = 0.0  # Decline exponent (0=exponential)
 
 
 @dataclass
@@ -28,76 +32,87 @@ class ForecastPoint:
     days_in_month: int
     oil_rate: float
     liq_rate: float
-    q_oil: float  # Cumulative oil production in month
-    q_liq: float  # Cumulative liquid production in month
-    wc: float  # Water cut percentage
+    q_oil: float  # Cumulative oil production in month (ton)
+    q_liq: float  # Cumulative liquid production in month (ton)
+    wc: float     # Water cut percentage
 
 
-def arps_exponential(qi: float, di: float, t: float) -> float:
-    """Exponential decline: q(t) = qi * exp(-di * t)
+def arps_exponential(qi: float, di: float, t: np.ndarray) -> np.ndarray:
+    """Exponential decline using daily elapsed time.
+    
+    Formula: q(t) = qi * exp(-di * 12/365 * t)
     
     Args:
-        qi: Initial rate (t/day or bbl/day)
-        di: Decline rate (1/month)
-        t: Time in months
+        qi: Initial rate (t/day)
+        di: Decline rate (1/year)
+        t: Elapsed time in days (numpy array)
     
     Returns:
-        Rate at time t
+        Rate at each time point (numpy array)
     """
     if di <= 0:
-        return qi
-    return qi * np.exp(-di * t)
+        return qi * np.ones_like(t, dtype=float)
+    return qi * np.exp(-di * 12 / 365 * t)
 
 
-def arps_hyperbolic(qi: float, di: float, b: float, t: float) -> float:
-    """Hyperbolic decline: q(t) = qi / (1 + b * di * t)^(1/b)
+def arps_hyperbolic(qi: float, di: float, b: float, t: np.ndarray) -> np.ndarray:
+    """Hyperbolic decline using daily elapsed time.
+    
+    Formula: q(t) = qi / (1 + b * di * 12/365 * t)^(1/b)
     
     Args:
-        qi: Initial rate
-        di: Initial decline rate (1/month)
+        qi: Initial rate (t/day)
+        di: Initial decline rate (1/year)
         b: Decline exponent (0 < b < 1)
-        t: Time in months
+        t: Elapsed time in days (numpy array)
     
     Returns:
-        Rate at time t
+        Rate at each time point (numpy array)
     """
     if di <= 0 or b <= 0:
-        return qi
-    return qi / ((1 + b * di * t) ** (1 / b))
+        return qi * np.ones_like(t, dtype=float)
+    time_factor = di * 12 / 365 * t
+    return qi / ((1 + b * time_factor) ** (1 / b))
 
 
-def arps_harmonic(qi: float, di: float, t: float) -> float:
-    """Harmonic decline: q(t) = qi / (1 + di * t)
+def arps_harmonic(qi: float, di: float, t: np.ndarray) -> np.ndarray:
+    """Harmonic decline using daily elapsed time.
     
+    Formula: q(t) = qi / (1 + di * 12/365 * t)
     Special case of hyperbolic where b = 1
     
     Args:
-        qi: Initial rate
-        di: Decline rate (1/month)
-        t: Time in months
+        qi: Initial rate (t/day)
+        di: Decline rate (1/year)
+        t: Elapsed time in days (numpy array)
     
     Returns:
-        Rate at time t
+        Rate at each time point (numpy array)
     """
     if di <= 0:
-        return qi
-    return qi / (1 + di * t)
+        return qi * np.ones_like(t, dtype=float)
+    return qi / (1 + di * 12 / 365 * t)
 
 
-def arps_decline(qi: float, di: float, b: float, t: float) -> float:
+def arps_decline(
+    qi: float, 
+    di: float, 
+    b: float, 
+    t: np.ndarray
+) -> np.ndarray:
     """General Arps decline function that selects appropriate model.
     
     Args:
-        qi: Initial rate
-        di: Initial decline rate (1/month)
+        qi: Initial rate (t/day)
+        di: Decline rate (1/year)
         b: Decline exponent
             - b = 0: Exponential decline
             - 0 < b < 1: Hyperbolic decline
             - b = 1: Harmonic decline
-        t: Time in months
+        t: Elapsed time in days (numpy array)
     
     Returns:
-        Rate at time t
+        Rate at each time point (numpy array)
     """
     if b == 0 or b < 0.001:  # Exponential
         return arps_exponential(qi, di, t)
@@ -107,66 +122,47 @@ def arps_decline(qi: float, di: float, b: float, t: float) -> float:
         return arps_hyperbolic(qi, di, b, t)
 
 
-def generate_monthly_dates(start_date: datetime, end_date: datetime) -> pd.DatetimeIndex:
-    """Generate monthly date range using pandas.
+def generate_forecast_dates(
+    start_date: datetime, 
+    end_date: datetime
+) -> Tuple[List[datetime], np.ndarray, np.ndarray, List[int]]:
+    """Generate forecast dates and elapsed days using pandas date_range.
+    
+    Uses freq="MS" (Month Start) and handles first day properly.
     
     Args:
-        start_date: Start date of forecast
-        end_date: End date of forecast
+        start_date: Forecast start date
+        end_date: Forecast end date
     
     Returns:
-        DatetimeIndex with monthly dates (start of month)
+        Tuple of:
+        - date_range: List of dates for each period
+        - elapsed_days: Array of elapsed days from start (for rate calculation)
+        - days_in_month: Array of days in each period
+        - month_indices: List of month indices (1-12) for KMonth lookup
     """
-    return pd.date_range(start=start_date, end=end_date, freq="MS")
-
-
-def calculate_elapsed_days(date_range: pd.DatetimeIndex) -> List[int]:
-    """Calculate number of days in each month from date range.
+    # Generate month start dates
+    date_range = pd.date_range(start_date, end_date, freq="MS").to_list()
     
-    Args:
-        date_range: DatetimeIndex of monthly dates
+    # If start_date is not 1st of month, insert it at beginning
+    first_day = pd.to_datetime(start_date)
+    if first_day.day != 1:
+        date_range.insert(0, first_day)
     
-    Returns:
-        List of days in each month
-    """
-    days_list = []
-    for date in date_range:
-        # Get number of days in the month
-        days_in_month = pd.Period(date, freq='M').days_in_month
-        days_list.append(days_in_month)
-    return days_list
-
-
-def get_month_index(date: datetime) -> int:
-    """Get month index (1-12) from date for KMonth lookup.
+    if len(date_range) < 2:
+        return [], np.array([]), np.array([]), []
     
-    Args:
-        date: Date to get month from
+    # Calculate elapsed days from start
+    elapsed_days = np.array([(d - date_range[0]).days for d in date_range])
     
-    Returns:
-        Month index (1=January, 12=December)
-    """
-    return date.month
-
-
-def calculate_cumulative_production(
-    rate: float,
-    days_in_month: int,
-    k_factor: float
-) -> float:
-    """Calculate cumulative production for a month.
+    # Calculate days in each period (difference between consecutive dates)
+    days_in_month = elapsed_days[1:] - elapsed_days[:-1]
     
-    Formula: Q = K * days_in_month * rate
+    # Get month index for each period (for KMonth lookup)
+    month_indices = [d.month for d in date_range[:-1]]
     
-    Args:
-        rate: Production rate (t/day)
-        days_in_month: Number of days in the month
-        k_factor: Uptime factor from KMonth table (0-1)
-    
-    Returns:
-        Cumulative production for the month (tons)
-    """
-    return k_factor * days_in_month * rate
+    # Use elapsed_days[:-1] for rate calculation (at start of each period)
+    return date_range[:-1], elapsed_days[:-1], days_in_month, month_indices
 
 
 def calculate_water_cut(oil_rate: float, liq_rate: float) -> float:
@@ -199,16 +195,20 @@ def run_dca_forecast(
     k_month_data: Dict[int, Dict[str, float]],
     use_exponential: bool = True
 ) -> List[ForecastPoint]:
-    """Run DCA forecast with KMonth integration.
+    """Run DCA forecast with KMonth integration using daily elapsed time.
+    
+    Key formulas:
+    - Rate: q(t) = qi * exp(-di * 12/365 * t) for exponential
+    - Cumulative: Q = rate * K * days_in_month
     
     Args:
         start_date: Forecast start date
         end_date: Forecast end date
         qi_oil: Initial oil rate (t/day)
-        di_oil: Oil decline rate (1/month)
+        di_oil: Oil decline rate (1/year)
         b_oil: Oil decline exponent
         qi_liq: Initial liquid rate (t/day)
-        di_liq: Liquid decline rate (1/month)
+        di_liq: Liquid decline rate (1/year)
         b_liq: Liquid decline exponent
         k_month_data: Dictionary of month_id -> {K_oil, K_liq, K_int, K_inj}
         use_exponential: If True, force exponential decline (ignore b values)
@@ -216,52 +216,122 @@ def run_dca_forecast(
     Returns:
         List of ForecastPoint objects
     """
-    # Generate monthly date range
-    date_range = generate_monthly_dates(start_date, end_date)
+    # Generate dates and elapsed days
+    date_range, elapsed_days, days_in_month, month_indices = generate_forecast_dates(
+        start_date, end_date
+    )
     
     if len(date_range) == 0:
         return []
     
-    # Calculate days in each month
-    days_list = calculate_elapsed_days(date_range)
+    # Get K factors for each month
+    k_oil_array = np.array([
+        k_month_data.get(m, {}).get("K_oil", 1.0) 
+        for m in month_indices
+    ])
+    k_liq_array = np.array([
+        k_month_data.get(m, {}).get("K_liq", 1.0) 
+        for m in month_indices
+    ])
     
+    # Calculate rates using vectorized Arps decline
+    if use_exponential:
+        oil_rates = arps_exponential(qi_oil, di_oil, elapsed_days)
+        liq_rates = arps_exponential(qi_liq, di_liq, elapsed_days)
+    else:
+        oil_rates = arps_decline(qi_oil, di_oil, b_oil, elapsed_days)
+        liq_rates = arps_decline(qi_liq, di_liq, b_liq, elapsed_days)
+    
+    # Ensure rates are non-negative
+    oil_rates = np.maximum(0.0, oil_rates)
+    liq_rates = np.maximum(0.0, liq_rates)
+    
+    # Calculate cumulative production: Q = rate * K * days_in_month
+    q_oil_array = oil_rates * k_oil_array * days_in_month
+    q_liq_array = liq_rates * k_liq_array * days_in_month
+    
+    # Build forecast points
     forecast_points = []
-    
-    for i, (date, days) in enumerate(zip(date_range, days_list)):
-        t = i  # Time in months (0-indexed)
-        
-        # Get K factors for this month
-        month_id = get_month_index(date)
-        k_data = k_month_data.get(month_id, {"K_oil": 1.0, "K_liq": 1.0, "K_int": 1.0})
-        k_oil = k_data.get("K_oil", 1.0)
-        k_liq = k_data.get("K_liq", 1.0)
-        
-        # Calculate rates using Arps decline
-        if use_exponential:
-            oil_rate = arps_exponential(qi_oil, di_oil, t)
-            liq_rate = arps_exponential(qi_liq, di_liq, t)
-        else:
-            oil_rate = arps_decline(qi_oil, di_oil, b_oil, t)
-            liq_rate = arps_decline(qi_liq, di_liq, b_liq, t)
-        
-        # Ensure rates are non-negative
-        oil_rate = max(0.0, oil_rate)
-        liq_rate = max(0.0, liq_rate)
-        
-        # Calculate cumulative production for the month
-        q_oil = calculate_cumulative_production(oil_rate, days, k_oil)
-        q_liq = calculate_cumulative_production(liq_rate, days, k_liq)
-        
-        # Calculate water cut
-        wc = calculate_water_cut(oil_rate, liq_rate)
+    for i, date in enumerate(date_range):
+        wc = calculate_water_cut(oil_rates[i], liq_rates[i])
         
         forecast_points.append(ForecastPoint(
-            date=date.to_pydatetime(),
-            days_in_month=days,
-            oil_rate=round(oil_rate, 2),
-            liq_rate=round(liq_rate, 2),
-            q_oil=round(q_oil, 2),
-            q_liq=round(q_liq, 2),
+            date=date.to_pydatetime() if hasattr(date, 'to_pydatetime') else date,
+            days_in_month=int(days_in_month[i]),
+            oil_rate=round(float(oil_rates[i]), 2),
+            liq_rate=round(float(liq_rates[i]), 2),
+            q_oil=round(float(q_oil_array[i]), 2),
+            q_liq=round(float(q_liq_array[i]), 2),
+            wc=round(wc, 2)
+        ))
+    
+    return forecast_points
+
+
+def run_dca_forecast_intervention(
+    start_date: datetime,
+    end_date: datetime,
+    qi_oil: float,
+    di_oil: float,
+    b_oil: float,
+    qi_liq: float,
+    di_liq: float,
+    b_liq: float,
+    k_month_data: Dict[int, Dict[str, float]],
+    use_exponential: bool = False  # Intervention uses hyperbolic by default
+) -> List[ForecastPoint]:
+    """Run DCA forecast for intervention using K_int factor.
+    
+    Similar to run_dca_forecast but uses K_int instead of K_oil/K_liq.
+    
+    Args:
+        Same as run_dca_forecast
+    
+    Returns:
+        List of ForecastPoint objects
+    """
+    # Generate dates and elapsed days
+    date_range, elapsed_days, days_in_month, month_indices = generate_forecast_dates(
+        start_date, end_date
+    )
+    
+    if len(date_range) == 0:
+        return []
+    
+    # Get K_int factors for each month (used for intervention forecast)
+    k_int_array = np.array([
+        k_month_data.get(m, {}).get("K_int", 1.0) 
+        for m in month_indices
+    ])
+    
+    # Calculate rates using vectorized Arps decline
+    if use_exponential:
+        oil_rates = arps_exponential(qi_oil, di_oil, elapsed_days)
+        liq_rates = arps_exponential(qi_liq, di_liq, elapsed_days)
+    else:
+        oil_rates = arps_decline(qi_oil, di_oil, b_oil, elapsed_days)
+        liq_rates = arps_decline(qi_liq, di_liq, b_liq, elapsed_days)
+    
+    # Ensure rates are non-negative
+    oil_rates = np.maximum(0.0, oil_rates)
+    liq_rates = np.maximum(0.0, liq_rates)
+    
+    # Calculate cumulative production using K_int
+    q_oil_array = oil_rates * k_int_array * days_in_month
+    q_liq_array = liq_rates * k_int_array * days_in_month
+    
+    # Build forecast points
+    forecast_points = []
+    for i, date in enumerate(date_range):
+        wc = calculate_water_cut(oil_rates[i], liq_rates[i])
+        
+        forecast_points.append(ForecastPoint(
+            date=date.to_pydatetime() if hasattr(date, 'to_pydatetime') else date,
+            days_in_month=int(days_in_month[i]),
+            oil_rate=round(float(oil_rates[i]), 2),
+            liq_rate=round(float(liq_rates[i]), 2),
+            q_oil=round(float(q_oil_array[i]), 2),
+            q_liq=round(float(q_liq_array[i]), 2),
             wc=round(wc, 2)
         ))
     
@@ -291,8 +361,9 @@ def forecast_to_dict_list(forecast_points: List[ForecastPoint]) -> List[Dict]:
     ]
 
 
-# Cumulative production calculation helpers
-def calculate_cumulative_totals(forecast_points: List[ForecastPoint]) -> Tuple[float, float]:
+def calculate_cumulative_totals(
+    forecast_points: List[ForecastPoint]
+) -> Tuple[float, float]:
     """Calculate total cumulative oil and liquid production.
     
     Args:
