@@ -1,4 +1,4 @@
-"""Well Intervention (GTM) management page - Reconstructed UI."""
+"""Well Intervention (GTM) management page - With Summary Tables."""
 import reflex as rx
 from ..templates.template import template
 from ..states.gtm_state import GTMState
@@ -10,6 +10,11 @@ from ..components.gtm_table import (
     history_stats_card
 )
 from ..components.gtm_charts import production_rate_chart
+from ..components.summary_tables import (
+    current_year_summary_table,
+    next_year_summary_table,
+    download_all_button,
+)
 
 
 def intervention_table_section() -> rx.Component:
@@ -176,10 +181,8 @@ def current_intervention_info() -> rx.Component:
                 border_radius="6px",
                 width="100%",
             ),
-            # History data stats (from HistoryProd - last 5 years)
             spacing="2",
             width="100%",
-            #align="end",
         ),
         rx.text("Select an intervention", color=rx.color("gray", 10), size="2"),
     )
@@ -207,7 +210,6 @@ def forecast_section() -> rx.Component:
                 # Production Records (from HistoryProd - last 5 years, showing last 24)
                 rx.vstack(
                     rx.hstack(
-                        #rx.text("Production History", size="2", weight="bold"),
                         rx.badge("Production History Last 5 Years", color_scheme="green", size="2"),
                         spacing="2",
                         align="center",
@@ -219,7 +221,6 @@ def forecast_section() -> rx.Component:
                 # Forecast Results
                 rx.vstack(
                     rx.hstack(
-                        #rx.text("Forecast Results", size="2", weight="bold"),
                         rx.cond(
                             GTMState.current_forecast_version > 0,
                             rx.badge(f"Intervention Forecast v{GTMState.current_forecast_version}", color_scheme="green", size="2"),
@@ -249,6 +250,34 @@ def forecast_section() -> rx.Component:
     )
 
 
+def summary_section() -> rx.Component:
+    """Summary tables section showing Qoil forecast by month for current and next year."""
+    return rx.vstack(
+        rx.hstack(
+            rx.hstack(
+                rx.icon("table-2", size=20, color=rx.color("blue", 9)),
+                rx.heading("Intervention Qoil Forecast Summary", size="5"),
+                spacing="2",
+                align="center",
+            ),
+            rx.spacer(),
+            download_all_button(),
+            width="100%",
+            align="center",
+        ),
+        rx.divider(),
+        rx.grid(
+            current_year_summary_table(),
+            next_year_summary_table(),
+            columns="1",
+            spacing="4",
+            width="100%",
+        ),
+        width="100%",
+        spacing="4",
+    )
+
+
 @template(
     route="/well-intervention",
     title="Well Intervention | GTM Dashboard",
@@ -256,11 +285,12 @@ def forecast_section() -> rx.Component:
     on_load=GTMState.load_gtms,
 )
 def well_intervention_page() -> rx.Component:
-    """Well Intervention management page - Reconstructed UI.
+    """Well Intervention management page with Summary Tables.
     
     Layout:
     - Top: Two-column grid (Left: Intervention Table | Right: Forecast/Production)
-    - Bottom: Rate vs Time scatter plot with intervention line
+    - Middle: Rate vs Time scatter plot with intervention line
+    - Bottom: Summary tables showing Qoil forecast by month for current and next year
     
     Features:
     - Production data from HistoryProd table (last 5 years)
@@ -268,20 +298,18 @@ def well_intervention_page() -> rx.Component:
     - Forecast versioning: Saves up to 3 forecast versions per intervention (FIFO)
     - Base forecast (v0): Production decline WITHOUT intervention for comparison
     - Version selector: Switch between different forecast versions
-    - Auto-save: Forecasts automatically saved to InterventionProd table
+    - Auto-save: Forecasts automatically saved to InterventionForecast table
+    - Summary Tables: Qoil by month for current year and next year
+    - Excel Export: Download summary data as Excel files
     
-    Base Forecast (Version 0):
-    - Represents what would happen if NO intervention was performed
-    - Generated from last history record using natural decline parameters
-    - Used as baseline comparison for intervention effectiveness
-    - Shows intervention gain/loss in cumulative production
+    Summary Table Columns:
+    - UniqueId, Field, Platform, Reservoir, Type, Category, Status, Date
+    - Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec, Total
     """
     return rx.vstack(
         # Page Header
         rx.hstack(
-            
             rx.heading("Well Intervention Management", size="6"),
-                
             rx.spacer(),
             rx.hstack(
                 rx.badge(f"Total: {GTMState.total_interventions}", color_scheme="blue"),
@@ -300,12 +328,16 @@ def well_intervention_page() -> rx.Component:
             intervention_table_section(),
             # Right: Forecast Section
             forecast_section(),
-            production_rate_chart(),
             columns="2",
-            rows="2",
             spacing="4",
             width="100%",
         ),
+        
+        # Production Rate Chart
+        production_rate_chart(),
+        
+        # Summary Tables Section
+        summary_section(),
         
         align="start",
         spacing="4",
