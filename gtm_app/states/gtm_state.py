@@ -1,10 +1,11 @@
 """State management for Well Intervention (GTM) operations - Using elapsed days DCA pattern."""
 import reflex as rx
 from collections import Counter
-from typing import Optional
+from typing import Optional, Dict, List
 from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
+import io
 from sqlmodel import String, asc, cast, desc, func, or_, select, delete
 
 from ..models import (
@@ -108,6 +109,15 @@ class GTMState(rx.State):
     # Base forecast status
     has_base_forecast: bool = False
     
+    # ========== Summary Tables State ==========
+    # Current year summary data (rows with monthly Qoil)
+    current_year_summary: list[dict] = []
+    # Next year summary data
+    next_year_summary: list[dict] = []
+    # Year labels
+    current_year: int = datetime.now().year
+    next_year: int = datetime.now().year + 1
+    
     def set_add_dialog_open(self, is_open: bool):
         self.add_dialog_open = is_open
     
@@ -176,9 +186,262 @@ class GTMState(rx.State):
             if self.available_ids and not self.selected_id:
                 self.selected_id = self.available_ids[0]
                 self.load_production_data()
+            
+            # Load summary tables
+            self.load_forecast_summary_tables()
+            
         except Exception as e:
             print(f"Error loading GTMs: {e}")
             self.GTM = []
+
+    def load_forecast_summary_tables(self):
+        """Load forecast summary data for current year and next year."""
+        try:
+            current_year = datetime.now().year
+            next_year = current_year + 1
+            
+            self.current_year = current_year
+            self.next_year = next_year
+            
+            with rx.session() as session:
+                # Get all interventions
+                interventions = session.exec(select(Intervention)).all()
+                
+                # Create lookup dictionary for intervention details
+                intervention_dict = {
+                    gtm.UniqueId: {
+                        "Field": gtm.Field,
+                        "Platform": gtm.Platform,
+                        "Reservoir": gtm.Reservoir,
+                        "Type": gtm.TypeGTM,
+                        "Category": gtm.Category,
+                        "Status": gtm.Status,
+                        "Date": gtm.PlanningDate
+                    }
+                    for gtm in interventions
+                }
+                
+                # Get all forecast data (use latest version for each UniqueId)
+                # First, get the max version for each UniqueId
+                subquery = select(
+                    InterventionForecast.UniqueId,
+                    func.max(InterventionForecast.Version).label("max_version")
+                ).where(
+                    InterventionForecast.Version > 0  # Exclude base case
+                ).group_by(InterventionForecast.UniqueId).subquery()
+                
+                # Then get the forecast data for the max versions
+                forecast_records = session.exec(
+                    select(InterventionForecast).where(
+                        InterventionForecast.Version > 0
+                    )
+                ).all()
+                
+                # Group forecast data by UniqueId and Version, take latest version
+                forecast_by_uid: Dict[str, Dict[int, List]] = {}
+                for rec in forecast_records:
+                    uid = rec.UniqueId
+                    ver = rec.Version
+                    if uid not in forecast_by_uid:
+                        forecast_by_uid[uid] = {}
+                    if ver not in forecast_by_uid[uid]:
+                        forecast_by_uid[uid][ver] = []
+                    forecast_by_uid[uid][ver].append(rec)
+                
+                # Process data for current year and next year
+                current_year_data = []
+                next_year_data = []
+                
+                for uid, versions in forecast_by_uid.items():
+                    if uid not in intervention_dict:
+                        continue
+                    
+                    # Get latest version
+                    latest_version = max(versions.keys())
+                    records = versions[latest_version]
+                    
+                    # Get intervention details
+                    details = intervention_dict[uid]
+                    
+                    # Initialize monthly Qoil for both years
+                    current_year_monthly = {m: 0.0 for m in range(1, 13)}
+                    next_year_monthly = {m: 0.0 for m in range(1, 13)}
+                    
+                    # Sum Qoil by month
+                    for rec in records:
+                        rec_date = rec.Date if isinstance(rec.Date, datetime) else datetime.strptime(str(rec.Date), "%Y-%m-%d")
+                        rec_year = rec_date.year
+                        rec_month = rec_date.month
+                        qoil = rec.Qoil if rec.Qoil else 0.0
+                        
+                        if rec_year == current_year:
+                            current_year_monthly[rec_month] += qoil
+                        elif rec_year == next_year:
+                            next_year_monthly[rec_month] += qoil
+                    
+                    # Build row for current year
+                    current_year_row = {
+                        "UniqueId": uid,
+                        "Field": details["Field"],
+                        "Platform": details["Platform"],
+                        "Reservoir": details["Reservoir"],
+                        "Type": details["Type"],
+                        "Category": details["Category"],
+                        "Status": details["Status"],
+                        "Date": details["Date"],
+                        "Jan": round(current_year_monthly[1], 1),
+                        "Feb": round(current_year_monthly[2], 1),
+                        "Mar": round(current_year_monthly[3], 1),
+                        "Apr": round(current_year_monthly[4], 1),
+                        "May": round(current_year_monthly[5], 1),
+                        "Jun": round(current_year_monthly[6], 1),
+                        "Jul": round(current_year_monthly[7], 1),
+                        "Aug": round(current_year_monthly[8], 1),
+                        "Sep": round(current_year_monthly[9], 1),
+                        "Oct": round(current_year_monthly[10], 1),
+                        "Nov": round(current_year_monthly[11], 1),
+                        "Dec": round(current_year_monthly[12], 1),
+                        "Total": round(sum(current_year_monthly.values()), 1)
+                    }
+                    
+                    # Build row for next year
+                    next_year_row = {
+                        "UniqueId": uid,
+                        "Field": details["Field"],
+                        "Platform": details["Platform"],
+                        "Reservoir": details["Reservoir"],
+                        "Type": details["Type"],
+                        "Category": details["Category"],
+                        "Status": details["Status"],
+                        "Date": details["Date"],
+                        "Jan": round(next_year_monthly[1], 1),
+                        "Feb": round(next_year_monthly[2], 1),
+                        "Mar": round(next_year_monthly[3], 1),
+                        "Apr": round(next_year_monthly[4], 1),
+                        "May": round(next_year_monthly[5], 1),
+                        "Jun": round(next_year_monthly[6], 1),
+                        "Jul": round(next_year_monthly[7], 1),
+                        "Aug": round(next_year_monthly[8], 1),
+                        "Sep": round(next_year_monthly[9], 1),
+                        "Oct": round(next_year_monthly[10], 1),
+                        "Nov": round(next_year_monthly[11], 1),
+                        "Dec": round(next_year_monthly[12], 1),
+                        "Total": round(sum(next_year_monthly.values()), 1)
+                    }
+                    
+                    # Only add if there's any production
+                    if sum(current_year_monthly.values()) > 0:
+                        current_year_data.append(current_year_row)
+                    if sum(next_year_monthly.values()) > 0:
+                        next_year_data.append(next_year_row)
+                
+                # Sort by UniqueId
+                self.current_year_summary = sorted(current_year_data, key=lambda x: x["UniqueId"])
+                self.next_year_summary = sorted(next_year_data, key=lambda x: x["UniqueId"])
+                
+        except Exception as e:
+            print(f"Error loading forecast summary: {e}")
+            import traceback
+            traceback.print_exc()
+            self.current_year_summary = []
+            self.next_year_summary = []
+
+    def download_current_year_excel(self):
+        """Download current year summary as Excel file."""
+        if not self.current_year_summary:
+            return rx.toast.error("No data available for current year")
+        
+        try:
+            df = pd.DataFrame(self.current_year_summary)
+            
+            # Reorder columns
+            columns_order = [
+                "UniqueId", "Field", "Platform", "Reservoir", "Type", "Category", 
+                "Status", "Date", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Total"
+            ]
+            df = df[columns_order]
+            
+            # Create Excel file in memory
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, sheet_name=f'Qoil_Forecast_{self.current_year}', index=False)
+            
+            output.seek(0)
+            
+            return rx.download(
+                data=output.getvalue(),
+                filename=f"Intervention_Qoil_Forecast_{self.current_year}.xlsx",
+            )
+            
+        except Exception as e:
+            print(f"Excel download error: {e}")
+            return rx.toast.error(f"Failed to download Excel: {str(e)}")
+
+    def download_next_year_excel(self):
+        """Download next year summary as Excel file."""
+        if not self.next_year_summary:
+            return rx.toast.error("No data available for next year")
+        
+        try:
+            df = pd.DataFrame(self.next_year_summary)
+            
+            # Reorder columns
+            columns_order = [
+                "UniqueId", "Field", "Platform", "Reservoir", "Type", "Category", 
+                "Status", "Date", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Total"
+            ]
+            df = df[columns_order]
+            
+            # Create Excel file in memory
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, sheet_name=f'Qoil_Forecast_{self.next_year}', index=False)
+            
+            output.seek(0)
+            
+            return rx.download(
+                data=output.getvalue(),
+                filename=f"Intervention_Qoil_Forecast_{self.next_year}.xlsx",
+            )
+            
+        except Exception as e:
+            print(f"Excel download error: {e}")
+            return rx.toast.error(f"Failed to download Excel: {str(e)}")
+
+    def download_both_years_excel(self):
+        """Download both years summary as single Excel file with multiple sheets."""
+        if not self.current_year_summary and not self.next_year_summary:
+            return rx.toast.error("No forecast data available")
+        
+        try:
+            columns_order = [
+                "UniqueId", "Field", "Platform", "Reservoir", "Type", "Category", 
+                "Status", "Date", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Total"
+            ]
+            
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                if self.current_year_summary:
+                    df_current = pd.DataFrame(self.current_year_summary)[columns_order]
+                    df_current.to_excel(writer, sheet_name=f'Qoil_{self.current_year}', index=False)
+                
+                if self.next_year_summary:
+                    df_next = pd.DataFrame(self.next_year_summary)[columns_order]
+                    df_next.to_excel(writer, sheet_name=f'Qoil_{self.next_year}', index=False)
+            
+            output.seek(0)
+            
+            return rx.download(
+                data=output.getvalue(),
+                filename=f"Intervention_Qoil_Forecast_{self.current_year}_{self.next_year}.xlsx",
+            )
+            
+        except Exception as e:
+            print(f"Excel download error: {e}")
+            return rx.toast.error(f"Failed to download Excel: {str(e)}")
 
     def load_production_data(self):
         """Load production data for selected intervention from HistoryProd table."""
@@ -481,11 +744,7 @@ class GTMState(rx.State):
             raise
 
     def generate_base_forecast(self):
-        """Generate base forecast (version 0) - production decline WITHOUT intervention.
-        
-        Uses last history record as starting point with decline parameters.
-        This represents what would happen if NO intervention was performed.
-        """
+        """Generate base forecast (version 0) - production decline WITHOUT intervention."""
         if not self.history_prod:
             return rx.toast.error("No production history available to generate base forecast")
         
@@ -512,12 +771,10 @@ class GTMState(rx.State):
             qi_liq = last_prod["LiqRate"]
             
             # Get decline parameters from current GTM or use defaults
-            # Base forecast uses lower decline rate (natural decline without intervention)
             if self.current_gtm:
-                # Use a fraction of intervention decline rate for natural decline
                 di_oil = self.current_gtm.Dio * 0.5 if self.current_gtm.Dio else 0.1
                 di_liq = self.current_gtm.Dil * 0.5 if self.current_gtm.Dil else 0.1
-                b_oil = 0.0  # Exponential for base case
+                b_oil = 0.0
                 b_liq = 0.0
             else:
                 di_oil = 0.1
@@ -540,7 +797,7 @@ class GTMState(rx.State):
                 di_liq=di_liq,
                 b_liq=b_liq,
                 k_month_data=self.k_month_data,
-                use_exponential=True  # Base case always uses exponential
+                use_exponential=True
             )
             
             if not forecast_points:
@@ -580,16 +837,7 @@ class GTMState(rx.State):
             return rx.toast.error(f"Base forecast failed: {str(e)}")
 
     def run_forecast(self):
-        """Run Arps decline curve forecast using elapsed days pattern.
-        
-        Formula: q(t) = qi * exp(-di * 12/365 * t) for exponential
-        Where t is elapsed days from start date.
-        
-        For 'Plan' status: Uses PlanningDate as start with parameters from InterventionID
-        For 'Done' status: Uses last production data as start point
-        
-        Cumulative: Qoil = OilRate * K_int * days_in_month
-        """
+        """Run Arps decline curve forecast using elapsed days pattern."""
         if not self.current_gtm or not self.forecast_end_date:
             return rx.toast.error("Please select an intervention and set forecast end date")
         
@@ -631,7 +879,7 @@ class GTMState(rx.State):
             if not self.k_month_data:
                 self.load_k_month_data()
             
-            # Run DCA forecast using intervention-specific function (uses K_int)
+            # Run DCA forecast
             forecast_points = run_dca_forecast_intervention(
                 start_date=start_date,
                 end_date=end_date,
@@ -681,6 +929,9 @@ class GTMState(rx.State):
             
             self.update_chart_data()
             
+            # Reload summary tables after forecast
+            self.load_forecast_summary_tables()
+            
             # Calculate totals for message
             total_qoil = sum(fp.q_oil for fp in forecast_points)
             total_qliq = sum(fp.q_liq for fp in forecast_points)
@@ -715,6 +966,7 @@ class GTMState(rx.State):
                 session.commit()
             
             self.load_production_data()
+            self.load_forecast_summary_tables()
             return rx.toast.success(f"Forecast version {version} deleted")
             
         except Exception as e:
@@ -749,12 +1001,9 @@ class GTMState(rx.State):
             return rx.toast.error("No file selected")
         
         try:
-            import pandas as pd
-            
             file = files[0]
             upload_data = await file.read()
             
-            import io
             df = pd.read_excel(io.BytesIO(upload_data))
             
             required_cols = [
@@ -946,6 +1195,8 @@ class GTMState(rx.State):
             for gtm_group, count in type_counts.items()
         ]
     
+    # ========== Computed Properties ==========
+    
     @rx.var
     def total_interventions(self) -> int:
         return len(self.GTM)
@@ -988,7 +1239,7 @@ class GTMState(rx.State):
                 "Qoil": f"{f.get('qOil', 0):.0f}",
                 "Qliq": f"{f.get('qLiq', 0):.0f}"
             }
-            for f in self.forecast_data[:12]  # Show first 12 months
+            for f in self.forecast_data[:12]
         ]
     
     @rx.var
@@ -1072,3 +1323,25 @@ class GTMState(rx.State):
     def k_month_loaded(self) -> bool:
         """Check if KMonth data is loaded."""
         return len(self.k_month_data) > 0
+    
+    # ========== Summary Table Computed Properties ==========
+    
+    @rx.var
+    def current_year_total_qoil(self) -> float:
+        """Total Qoil for current year."""
+        return sum(row.get("Total", 0) for row in self.current_year_summary)
+    
+    @rx.var
+    def next_year_total_qoil(self) -> float:
+        """Total Qoil for next year."""
+        return sum(row.get("Total", 0) for row in self.next_year_summary)
+    
+    @rx.var
+    def current_year_count(self) -> int:
+        """Number of interventions with forecast in current year."""
+        return len(self.current_year_summary)
+    
+    @rx.var
+    def next_year_count(self) -> int:
+        """Number of interventions with forecast in next year."""
+        return len(self.next_year_summary)
