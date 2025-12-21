@@ -1,15 +1,17 @@
-"""Refactored Production State using DCA Service and Shared State.
+"""Refactored Production State with Dip/Dir support.
 
-This state manages Production monitoring and forecasting with improved
-code organization using service classes.
+This state manages Production monitoring and forecasting with:
+- Dip: Platform-level decline adjustment
+- Dir: Reservoir+Field level decline adjustment
+- Effective Di = Do * (1 + Dip) * (1 + Dir)
 
-DCA Formula: q(t) = qi * exp(-di * 12/365 * t)
+DCA Formula: q(t) = qi * exp(-Di_eff * 12/365 * t)
 Cumulative: Qoil = OilRate * K_oil * days_in_month
 """
 import reflex as rx
 from typing import Optional, List, Tuple
 from datetime import datetime, timedelta
-from sqlmodel import select, delete, func, desc
+from sqlmodel import select, delete, func, desc, or_
 
 from ..models import (
     CompletionID,
@@ -17,7 +19,10 @@ from ..models import (
     ProductionForecast,
     Intervention,
     InterventionForecast,
-    MAX_PRODUCTION_FORECAST_VERSIONS
+    WellID,
+    MAX_PRODUCTION_FORECAST_VERSIONS,
+    FIELD_OPTIONS,
+    RESERVOIR_OPTIONS,
 )
 from ..services.dca_service import DCAService, ForecastConfig, ForecastResult
 from ..services.database_service import DatabaseService
@@ -25,10 +30,7 @@ from .shared_state import SharedForecastState
 
 
 class ProductionState(SharedForecastState):
-    """State for Production monitoring and forecasting.
-    
-    Inherits common functionality from SharedForecastState.
-    """
+    """State for Production monitoring and forecasting with Dip/Dir support."""
     
     # CompletionID data
     completions: List[CompletionID] = []
@@ -46,6 +48,10 @@ class ProductionState(SharedForecastState):
     dil: float = 0.0
     b_oil: float = 0.0
     b_liq: float = 0.0
+    
+    # Decline adjustment parameters
+    dip: float = 0.0  # Platform-level adjustment
+    dir: float = 0.0  # Reservoir+Field level adjustment
     
     # Intervention status
     has_planned_intervention: bool = False
@@ -111,9 +117,10 @@ class ProductionState(SharedForecastState):
         self.search_value = search_value
         self._apply_filters()
 
-    def filter_by_reservoir(self, reservoir: str):
-        """Filter by selected reservoir."""
-        self.selected_reservoir = reservoir if reservoir != "All Reservoirs" else ""
+    def clear_filters(self):
+        """Clear all filters."""
+        self.search_value = ""
+        self.selected_reservoir = ""
         self._apply_filters()
 
     def get_completion(self, completion: CompletionID):
@@ -121,7 +128,7 @@ class ProductionState(SharedForecastState):
         self.current_completion = completion
 
     def update_completion(self, form_data: dict):
-        """Update CompletionID Do and Dl fields in database."""
+        """Update CompletionID Do, Dl, Dip, Dir fields in database."""
         try:
             if not self.current_completion:
                 return rx.toast.error("No completion selected for update")
@@ -136,7 +143,8 @@ class ProductionState(SharedForecastState):
                 if not completion_to_update:
                     return rx.toast.error(f"Completion '{unique_id}' not found")
                 
-                for field in ["Do", "Dl"]:
+                # Update all decline parameters
+                for field in ["Do", "Dl", "Dip", "Dir"]:
                     value = form_data.get(field)
                     if value is not None and str(value).strip() != "":
                         try:
@@ -156,12 +164,84 @@ class ProductionState(SharedForecastState):
                 self.selected_completion = self.current_completion
                 self.dio = self.current_completion.Do if self.current_completion.Do else 0.0
                 self.dil = self.current_completion.Dl if self.current_completion.Dl else 0.0
+                self.dip = self.current_completion.Dip if self.current_completion.Dip else 0.0
+                self.dir = self.current_completion.Dir if self.current_completion.Dir else 0.0
             
             return rx.toast.success(f"Completion '{unique_id}' updated")
             
         except Exception as e:
             print(f"Update error: {e}")
             return rx.toast.error(f"Failed to update completion: {str(e)}")
+
+    def batch_update_dip(self, form_data: dict):
+        """Batch update Dip for all completions on a platform."""
+        try:
+            platform = form_data.get("platform")
+            dip_value = float(form_data.get("dip_value", 0))
+            
+            if not platform:
+                return rx.toast.error("Please select a platform")
+            
+            updated_count = 0
+            with rx.session() as session:
+                completions = session.exec(
+                    select(CompletionID).join(
+                        WellID, CompletionID.WellName == WellID.WellName
+                    ).where(WellID.Platform == platform)
+                ).all()
+                
+                for comp in completions:
+                    comp.Dip = dip_value
+                    session.add(comp)
+                    updated_count += 1
+                
+                session.commit()
+            
+            self._all_completions = []
+            self.load_completions()
+            
+            return rx.toast.success(f"Updated Dip={dip_value} for {updated_count} completions on {platform}")
+            
+        except Exception as e:
+            return rx.toast.error(f"Batch update failed: {str(e)}")
+
+    def batch_update_dir(self, form_data: dict):
+        """Batch update Dir for all completions in a reservoir+field."""
+        try:
+            field = form_data.get("field")
+            reservoir = form_data.get("reservoir")
+            dir_value = float(form_data.get("dir_value", 0))
+            
+            if not field or not reservoir:
+                return rx.toast.error("Please select both field and reservoir")
+            
+            updated_count = 0
+            with rx.session() as session:
+                completions = session.exec(
+                    select(CompletionID).join(
+                        WellID, CompletionID.WellName == WellID.WellName
+                    ).where(
+                        WellID.Field == field,
+                        CompletionID.Reservoir == reservoir
+                    )
+                ).all()
+                
+                for comp in completions:
+                    comp.Dir = dir_value
+                    session.add(comp)
+                    updated_count += 1
+                
+                session.commit()
+            
+            self._all_completions = []
+            self.load_completions()
+            
+            return rx.toast.success(
+                f"Updated Dir={dir_value} for {updated_count} completions in {reservoir} of {field}"
+            )
+            
+        except Exception as e:
+            return rx.toast.error(f"Batch update failed: {str(e)}")
 
     def set_selected_unique_id(self, unique_id: str):
         """Set selected completion and trigger data load."""
@@ -182,9 +262,12 @@ class ProductionState(SharedForecastState):
         if self.selected_completion:
             self.dio = self.selected_completion.Do if self.selected_completion.Do else 0.0
             self.dil = self.selected_completion.Dl if self.selected_completion.Dl else 0.0
+            self.dip = self.selected_completion.Dip if self.selected_completion.Dip else 0.0
+            self.dir = self.selected_completion.Dir if self.selected_completion.Dir else 0.0
         
         return ProductionState.load_production_data_background
 
+    @rx.event(background=True)
     async def load_production_data_background(self):
         """Load production data in background."""
         async with self:
@@ -204,10 +287,8 @@ class ProductionState(SharedForecastState):
             intervention_text = ""
             
             with rx.session() as session:
-                # Load history using service
                 history_data = DCAService.load_history_data(session, unique_id, years=5)
                 
-                # Check for planned intervention
                 intervention = session.exec(
                     select(Intervention).where(
                         Intervention.UniqueId == unique_id,
@@ -219,7 +300,6 @@ class ProductionState(SharedForecastState):
                 if intervention:
                     intervention_text = f"{intervention.TypeGTM} planned on {intervention.PlanningDate}"
                 
-                # Load forecast versions
                 forecast_versions = DatabaseService.get_available_versions(
                     session, ProductionForecast, unique_id, min_version=1
                 )
@@ -230,7 +310,6 @@ class ProductionState(SharedForecastState):
                 self.intervention_info = intervention_text
                 self.available_forecast_versions = forecast_versions
                 
-                # Calculate qi from last history record
                 if self.history_prod:
                     sorted_history = sorted(self.history_prod, key=lambda x: x["Date"])
                     last_record = sorted_history[-1]
@@ -288,7 +367,7 @@ class ProductionState(SharedForecastState):
             self.set_forecast_version(version)
 
     def run_forecast(self):
-        """Run DCA forecast using service."""
+        """Run DCA forecast using service with Dip/Dir adjustments."""
         if not self.selected_completion or not self.forecast_end_date:
             return rx.toast.error("Please select a completion and set forecast end date")
         
@@ -314,7 +393,7 @@ class ProductionState(SharedForecastState):
             
             self._load_k_month_data()
             
-            # Create forecast config
+            # Create forecast config with Dip/Dir
             config = ForecastConfig(
                 qi_oil=self.qi_oil,
                 di_oil=self.dio,
@@ -325,7 +404,9 @@ class ProductionState(SharedForecastState):
                 start_date=start_date,
                 end_date=end_date,
                 use_exponential=self.use_exponential_dca,
-                k_month_data=self.k_month_data
+                k_month_data=self.k_month_data,
+                dip=self.dip,
+                dir=self.dir
             )
             
             # Run forecast using service
@@ -363,7 +444,10 @@ class ProductionState(SharedForecastState):
             
             self._update_chart_data()
             
-            msg = f"Forecast v{version} saved: {result.months} months, Qoil={result.total_qoil:.0f}t"
+            msg = (
+                f"Forecast v{version}: {result.months} months, "
+                f"Di_eff={result.effective_di_oil:.4f}, Qoil={result.total_qoil:.0f}t"
+            )
             if self.has_planned_intervention:
                 msg += " (+ InterventionForecast v0)"
             
@@ -418,7 +502,7 @@ class ProductionState(SharedForecastState):
         return rx.toast.warning("Batch forecast cancellation requested...")
 
     def run_forecast_all(self):
-        """Run DCA forecast for all completions."""
+        """Run DCA forecast for all completions with Dip/Dir."""
         if not self.forecast_end_date:
             yield rx.toast.error("Please set forecast end date first")
             return
@@ -443,13 +527,11 @@ class ProductionState(SharedForecastState):
             
             self._load_k_month_data()
             
-            # Bulk load history data
             with rx.session() as session:
                 history_by_completion = DatabaseService.bulk_load_history(
                     session, HistoryProd, cutoff_date=five_years_ago
                 )
                 
-                # Get interventions
                 planned_interventions = session.exec(
                     select(Intervention.UniqueId).where(Intervention.Status == "Plan")
                 ).all()
@@ -489,6 +571,10 @@ class ProductionState(SharedForecastState):
                 if isinstance(start_date, str):
                     start_date = datetime.strptime(start_date, "%Y-%m-%d")
                 
+                # Get Dip and Dir from completion
+                dip = completion.Dip if completion.Dip else 0.0
+                dir_val = completion.Dir if completion.Dir else 0.0
+                
                 config = ForecastConfig(
                     qi_oil=last_prod["OilRate"],
                     di_oil=di_oil,
@@ -499,7 +585,9 @@ class ProductionState(SharedForecastState):
                     start_date=start_date,
                     end_date=end_date,
                     use_exponential=True,
-                    k_month_data=self.k_month_data
+                    k_month_data=self.k_month_data,
+                    dip=dip,
+                    dir=dir_val
                 )
                 
                 result = DCAService.run_production_forecast(config)
@@ -535,7 +623,8 @@ class ProductionState(SharedForecastState):
                         "Version": version,
                         "Months": result.months,
                         "Qoil": round(result.total_qoil, 0),
-                        "Qliq": round(result.total_qliq, 0)
+                        "Qliq": round(result.total_qliq, 0),
+                        "Di_eff": round(result.effective_di_oil, 4)
                     })
                     
                 except Exception as e:
@@ -572,8 +661,37 @@ class ProductionState(SharedForecastState):
         return ["All Reservoirs"] + sorted(reservoirs)
     
     @rx.var
+    def unique_platforms(self) -> List[str]:
+        """Get unique platforms from WellID for batch Dip updates."""
+        from ..models import PLATFORM_OPTIONS
+        return PLATFORM_OPTIONS
+    
+    @rx.var
+    def unique_fields(self) -> List[str]:
+        """Get unique fields for batch Dir updates."""
+        return FIELD_OPTIONS
+    
+    @rx.var
     def dca_parameters_display(self) -> str:
-        return f"qi_o: {self.qi_oil:.1f} | qi_l: {self.qi_liq:.1f} | Dio: {self.dio:.4f} | Dil: {self.dil:.4f}"
+        return f"Do: {self.dio:.4f} | Dl: {self.dil:.4f}"
+    
+    @rx.var
+    def dip_display(self) -> str:
+        return f"{self.dip:.2f}"
+    
+    @rx.var
+    def dir_display(self) -> str:
+        return f"{self.dir:.2f}"
+    
+    @rx.var
+    def effective_di_oil(self) -> float:
+        """Calculate effective oil decline rate."""
+        return self.dio * (1 + self.dip) * (1 + self.dir)
+    
+    @rx.var
+    def effective_di_display(self) -> str:
+        """Display effective decline rate."""
+        return f"{self.effective_di_oil:.4f}"
     
     @rx.var
     def production_table_data(self) -> List[dict]:
