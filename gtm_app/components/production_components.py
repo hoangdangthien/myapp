@@ -1,27 +1,31 @@
-"""Components for Production monitoring page with DCA forecasting."""
+"""Components for Production monitoring page with DCA forecasting.
+
+Updated to include Dip and Dir columns, filter by reservoir.
+"""
 import reflex as rx
 from ..states.production_state import ProductionState
-from ..models import CompletionID
+from ..models import CompletionID, RESERVOIR_OPTIONS
 from .form_fields import form_field
 
 
 def completion_filter_controls() -> rx.Component:
-    """Filter controls for CompletionID table."""
+    """Filter controls for CompletionID table with reservoir filter."""
     return rx.hstack(
         rx.input(
             rx.input.slot(rx.icon("search")),
             placeholder="Search by ID or Well name...",
-            size="2",
-            width="220px",
+            size="1",
+            width="200px",
             on_change=ProductionState.filter_completions,
-            debounce_timeout=300,  # 300ms debounce to prevent lag
+            debounce_timeout=300,
         ),
-        rx.select(
-            ProductionState.unique_reservoirs,
-            placeholder="Filter by Reservoir",
-            size="2",
-            width="180px",
-            on_change=ProductionState.filter_by_reservoir,
+        
+        rx.button(
+            rx.icon("refresh-cw", size=14),
+            rx.text("Clear", size="1"),
+            variant="soft",
+            size="1",
+            on_click=ProductionState.clear_filters,
         ),
         spacing="2",
         align="center",
@@ -29,7 +33,7 @@ def completion_filter_controls() -> rx.Component:
 
 
 def update_completion_dialog(completion: CompletionID) -> rx.Component:
-    """Dialog for editing CompletionID decline parameters (Do and Dl only)."""
+    """Dialog for editing CompletionID decline parameters (Do, Dl, Dip, Dir)."""
     return rx.dialog.root(
         rx.dialog.trigger(
             rx.button(
@@ -43,29 +47,38 @@ def update_completion_dialog(completion: CompletionID) -> rx.Component:
         rx.dialog.content(
             rx.dialog.title("Edit Decline Parameters"),
             rx.dialog.description(
-                rx.vstack(
-                    rx.text(f"UniqueId: ", weight="bold", size="2", as_="span"),
-                    rx.text(completion.UniqueId, size="2", as_="span"),
-                    rx.text(f"Well: ", weight="bold", size="2", as_="span"),
-                    rx.text(
-                        rx.cond(completion.WellName, completion.WellName, "-"),
-                        size="2",
-                        as_="span"
+                rx.hstack(
+                    rx.vstack(
+                        rx.text("UniqueId:", size="1", weight="bold"),
+                        rx.text(completion.UniqueId, size="2"),
+                        spacing="0",
                     ),
-                    rx.text(f"Reservoir: ", weight="bold", size="2", as_="span"),
-                    rx.badge(
-                        rx.cond(completion.Reservoir, completion.Reservoir, "-"),
-                        color_scheme="blue",
-                        size="1"
+                    rx.divider(orientation="vertical", size="2"),
+                    rx.vstack(
+                        rx.text("Well:", size="1", weight="bold"),
+                        rx.text(
+                            rx.cond(completion.WellName, completion.WellName, "-"),
+                            size="2"
+                        ),
+                        spacing="0",
                     ),
-                    direction="row",
-                    spacing="2",
+                    rx.divider(orientation="vertical", size="2"),
+                    rx.vstack(
+                        rx.text("Reservoir:", size="1", weight="bold"),
+                        rx.badge(
+                            rx.cond(completion.Reservoir, completion.Reservoir, "-"),
+                            color_scheme="blue",
+                            size="1"
+                        ),
+                        spacing="0",
+                    ),
+                    spacing="3",
                     wrap="wrap",
                 )
             ),
             rx.form(
                 rx.flex(
-                    rx.text("Decline Rate Parameters (1/year)", size="2", weight="bold", color=rx.color("gray", 11)),
+                    rx.text("Base Decline Rates (1/year)", size="2", weight="bold", color=rx.color("gray", 11)),
                     rx.grid(
                         rx.flex(
                             rx.text("Do (Oil Decline)", size="2", weight="bold"),
@@ -77,17 +90,7 @@ def update_completion_dialog(completion: CompletionID) -> rx.Component:
                                 step="0.0001",
                                 width="100%",
                             ),
-                            rx.text("Current: ", size="1", color=rx.color("gray", 10), as_="span"),
-                            rx.text(
-                                rx.cond(
-                                    completion.Do,
-                                    completion.Do.to(str),
-                                    "0"
-                                ),
-                                size="1",
-                                weight="medium",
-                                as_="span"
-                            ),
+                            rx.text(f"Current: {completion.Do}", size="1", color=rx.color("gray", 10)),
                             direction="column",
                             spacing="1",
                             width="100%",
@@ -102,17 +105,58 @@ def update_completion_dialog(completion: CompletionID) -> rx.Component:
                                 step="0.0001",
                                 width="100%",
                             ),
-                            rx.text("Current: ", size="1", color=rx.color("gray", 10), as_="span"),
-                            rx.text(
-                                rx.cond(
-                                    completion.Dl,
-                                    completion.Dl.to(str),
-                                    "0"
+                            rx.text(f"Current: {completion.Dl}", size="1", color=rx.color("gray", 10)),
+                            direction="column",
+                            spacing="1",
+                            width="100%",
+                        ),
+                        columns="2",
+                        spacing="4",
+                        width="100%",
+                    ),
+                    rx.divider(),
+                    rx.text("Decline Adjustment Factors", size="2", weight="bold", color=rx.color("orange", 11)),
+                    rx.grid(
+                        rx.flex(
+                            rx.hstack(
+                                rx.text("Dip (Platform Adj.)", size="2", weight="bold"),
+                                rx.tooltip(
+                                    rx.icon("info", size=12, color=rx.color("gray", 9)),
+                                    content="Platform-level adjustment. Applied to all completions on same platform.",
                                 ),
-                                size="1",
-                                weight="medium",
-                                as_="span"
+                                spacing="1",
                             ),
+                            rx.input(
+                                placeholder="Platform adjustment factor",
+                                type="number",
+                                name="Dip",
+                                default_value=completion.Dip.to(str),
+                                step="0.01",
+                                width="100%",
+                            ),
+                            rx.text(f"Current: {completion.Dip}", size="1", color=rx.color("gray", 10)),
+                            direction="column",
+                            spacing="1",
+                            width="100%",
+                        ),
+                        rx.flex(
+                            rx.hstack(
+                                rx.text("Dir (Reservoir+Field Adj.)", size="2", weight="bold"),
+                                rx.tooltip(
+                                    rx.icon("info", size=12, color=rx.color("gray", 9)),
+                                    content="Reservoir+Field level adjustment. Different for each reservoir in each field.",
+                                ),
+                                spacing="1",
+                            ),
+                            rx.input(
+                                placeholder="Reservoir+Field adjustment factor",
+                                type="number",
+                                name="Dir",
+                                default_value=completion.Dir.to(str),
+                                step="0.01",
+                                width="100%",
+                            ),
+                            rx.text(f"Current: {completion.Dir}", size="1", color=rx.color("gray", 10)),
                             direction="column",
                             spacing="1",
                             width="100%",
@@ -122,8 +166,13 @@ def update_completion_dialog(completion: CompletionID) -> rx.Component:
                         width="100%",
                     ),
                     rx.callout(
-                        rx.text("These decline rates are used in the Exponential DCA formula: q(t) = qi × exp(-Di × t)", size="1"),
-                        icon="info",
+                        rx.vstack(
+                            rx.text("Effective Decline Rate Formula:", size="1", weight="bold"),
+                            rx.text("Di_eff = Do × (1 + Dip) × (1 + Dir)", size="1"),
+                            spacing="1",
+                            align="start",
+                        ),
+                        icon="calculator",
                         color_scheme="blue",
                         size="1",
                     ),
@@ -143,13 +192,13 @@ def update_completion_dialog(completion: CompletionID) -> rx.Component:
                 on_submit=ProductionState.update_completion,
                 reset_on_submit=False,
             ),
-            max_width="450px",
+            max_width="550px",
         ),
     )
 
 
 def show_completion_row(completion: CompletionID) -> rx.Component:
-    """Display a completion in a table row."""
+    """Display a completion in a table row with Dip and Dir columns."""
     return rx.table.row(
         rx.table.cell(
             rx.text(completion.UniqueId, size="1", weight="medium"),
@@ -169,39 +218,35 @@ def show_completion_row(completion: CompletionID) -> rx.Component:
         ),
         rx.table.cell(
             rx.text(
-                rx.cond(completion.Completion, completion.Completion, "-"),
-                size="1"
-            )
-        ),
-        rx.table.cell(
-            rx.text(
-                rx.cond(
-                    completion.KH,
-                    completion.KH.to(str),
-                    "-"
-                ),
+                rx.cond(completion.KH, completion.KH.to(str), "-"),
                 size="1"
             )
         ),
         rx.table.cell(
             rx.badge(
-                rx.cond(
-                    completion.Do,
-                    completion.Do.to(str),
-                    "-"
-                ),
+                rx.cond(completion.Do, completion.Do.to(str), "-"),
+                color_scheme="green",
+                size="1"
+            ),
+        ),
+        rx.table.cell(
+            rx.badge(
+                rx.cond(completion.Dl, completion.Dl.to(str), "-"),
+                color_scheme="green",
+                size="1"
+            ),
+        ),
+        rx.table.cell(
+            rx.badge(
+                rx.cond(completion.Dip, completion.Dip.to(str), "0"),
                 color_scheme="orange",
                 size="1"
             ),
         ),
         rx.table.cell(
             rx.badge(
-                rx.cond(
-                    completion.Dl,
-                    completion.Dl.to(str),
-                    "-"
-                ),
-                color_scheme="orange",
+                rx.cond(completion.Dir, completion.Dir.to(str), "0"),
+                color_scheme="purple",
                 size="1"
             ),
         ),
@@ -215,7 +260,7 @@ def show_completion_row(completion: CompletionID) -> rx.Component:
 
 
 def completion_table() -> rx.Component:
-    """Main CompletionID table component."""
+    """Main CompletionID table component with Dip/Dir columns."""
     return rx.box(
         rx.table.root(
             rx.table.header(
@@ -223,10 +268,39 @@ def completion_table() -> rx.Component:
                     rx.table.column_header_cell(rx.text("Unique ID", size="1", weight="bold")),
                     rx.table.column_header_cell(rx.text("Well Name", size="1", weight="bold")),
                     rx.table.column_header_cell(rx.text("Reservoir", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("Completion", size="1", weight="bold")),
                     rx.table.column_header_cell(rx.text("KH", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("Doil", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("Dliq", size="1", weight="bold")),
+                    rx.table.column_header_cell(
+                        rx.tooltip(
+                            rx.text("Do", size="1", weight="bold"),
+                            content="Base oil decline rate (1/year)"
+                        )
+                    ),
+                    rx.table.column_header_cell(
+                        rx.tooltip(
+                            rx.text("Dl", size="1", weight="bold"),
+                            content="Base liquid decline rate (1/year)"
+                        )
+                    ),
+                    rx.table.column_header_cell(
+                        rx.tooltip(
+                            rx.hstack(
+                                rx.text("Dip", size="1", weight="bold"),
+                                rx.icon("info", size=10, color=rx.color("orange", 9)),
+                                spacing="1",
+                            ),
+                            content="Platform-level decline adjustment factor"
+                        )
+                    ),
+                    rx.table.column_header_cell(
+                        rx.tooltip(
+                            rx.hstack(
+                                rx.text("Dir", size="1", weight="bold"),
+                                rx.icon("info", size=10, color=rx.color("purple", 9)),
+                                spacing="1",
+                            ),
+                            content="Reservoir+Field level decline adjustment factor"
+                        )
+                    ),
                     rx.table.column_header_cell(rx.text("Actions", size="1", weight="bold")),
                 ),
             ),
@@ -279,6 +353,27 @@ def completion_stats_summary() -> rx.Component:
         rx.card(
             rx.vstack(
                 rx.hstack(
+                    rx.icon("filter", size=18, color=rx.color("purple", 9)),
+                    rx.text("Filtered Reservoir", size="1", weight="bold"),
+                    spacing="2",
+                ),
+                rx.text(
+                    rx.cond(
+                        ProductionState.selected_reservoir != "",
+                        ProductionState.selected_reservoir,
+                        "All Reservoirs"
+                    ),
+                    size="2",
+                    weight="medium"
+                ),
+                spacing="1",
+                align="start",
+            ),
+            padding="1em",
+        ),
+        rx.card(
+            rx.vstack(
+                rx.hstack(
                     rx.icon("calendar", size=18, color=rx.color("orange", 9)),
                     rx.text("Date Range (5Y)", size="1", weight="bold"),
                     spacing="2",
@@ -289,14 +384,14 @@ def completion_stats_summary() -> rx.Component:
             ),
             padding="1em",
         ),
-        columns="3",
+        columns="4",
         spacing="3",
         width="100%",
     )
 
 
 def selected_completion_info() -> rx.Component:
-    """Display selected completion info with DCA parameters."""
+    """Display selected completion info with DCA parameters including Dip/Dir."""
     return rx.cond(
         ProductionState.selected_unique_id != "",
         rx.card(
@@ -324,13 +419,26 @@ def selected_completion_info() -> rx.Component:
                         spacing="0",
                     ),
                     rx.divider(orientation="vertical", size="2"),
-                    rx.badge(
-                        rx.vstack(
-                            rx.text("DCA Params:", size="1", color=rx.color("gray", 10)),
-                            rx.text(ProductionState.dca_parameters_display, size="1"),
-                            spacing="0",
+                    rx.vstack(
+                        rx.text("Base DCA:", size="1", color=rx.color("gray", 10)),
+                        rx.text(ProductionState.dca_parameters_display, size="1"),
+                        spacing="0",
+                    ),
+                    rx.divider(orientation="vertical", size="2"),
+                    rx.vstack(
+                        rx.text("Adjustments:", size="1", color=rx.color("gray", 10)),
+                        rx.hstack(
+                            rx.badge(f"Dip: {ProductionState.dip_display}", color_scheme="orange", size="1"),
+                            rx.badge(f"Dir: {ProductionState.dir_display}", color_scheme="purple", size="1"),
+                            spacing="1",
                         ),
-                        color_scheme="green",
+                        spacing="0",
+                    ),
+                    rx.divider(orientation="vertical", size="2"),
+                    rx.vstack(
+                        rx.text("Effective Di:", size="1", color=rx.color("gray", 10)),
+                        rx.badge(ProductionState.effective_di_display, color_scheme="green", size="1"),
+                        spacing="0",
                     ),
                     rx.divider(orientation="vertical", size="2"),
                     forecast_version_selector(),
@@ -352,6 +460,7 @@ def selected_completion_info() -> rx.Component:
                     border_radius="6px",
                     width="100%",
                     align="center",
+                    wrap="wrap",
                 ),
                 # Intervention warning if planned
                 rx.cond(
@@ -380,290 +489,6 @@ def selected_completion_info() -> rx.Component:
     )
 
 
-def forecast_controls() -> rx.Component:
-    """Forecast control panel with UniqueId selector, date input, and run button."""
-    return rx.hstack(
-        rx.vstack(
-            rx.text("Unique ID:", size="1", weight="bold"),
-            rx.select(
-                ProductionState.available_unique_ids,
-                value=ProductionState.selected_unique_id,
-                on_change=ProductionState.set_selected_unique_id,
-                size="1",
-                width="150px",
-            ),
-            spacing="1",
-        ),
-        rx.vstack(
-            rx.text("Forecast End Date:", size="1", weight="bold"),
-            rx.input(
-                type="date",
-                on_change=ProductionState.set_forecast_end_date,
-                width="150px",
-                size="1",
-            ),
-            spacing="1",
-        ),
-        rx.button(
-            rx.icon("trending-up", size=16),
-            rx.text("Run DCA Forecast", size="2"),
-            on_click=ProductionState.run_forecast,
-            size="2",
-        ),
-        # Run All Button with batch forecast dialog
-        batch_forecast_button(),
-        spacing="3",
-        align="end",
-    )
-
-
-def batch_forecast_button() -> rx.Component:
-    """Button to trigger batch forecast for all completions."""
-    return rx.dialog.root(
-        rx.dialog.trigger(
-            rx.button(
-                rx.icon("layers", size=16),
-                rx.text("Run All", size="2"),
-                variant="soft",
-                color_scheme="blue",
-                size="2",
-                disabled=ProductionState.is_batch_forecasting,
-            ),
-        ),
-        rx.dialog.content(
-            rx.dialog.title(
-                rx.hstack(
-                    rx.icon("layers", size=20, color=rx.color("blue", 9)),
-                    rx.text("Batch Forecast - All Completions"),
-                    spacing="2",
-                )
-            ),
-            rx.dialog.description(
-                rx.text(
-                    "Run DCA forecast for all completions in the database. "
-                    "This operation uses vectorized calculations and runs in the background.",
-                    size="2"
-                )
-            ),
-            rx.vstack(
-                # Requirements check
-                rx.callout(
-                    rx.vstack(
-                        rx.text("Before running:", weight="bold", size="2"),
-                        rx.text("• Set Forecast End Date in the controls above", size="1"),
-                        rx.text("• Ensure CompletionID has valid Di parameters", size="1"),
-                        rx.text("• Completions without history will be skipped", size="1"),
-                        spacing="1",
-                        align="start",
-                    ),
-                    icon="info",
-                    color_scheme="blue",
-                    size="1",
-                ),
-                
-                # Stats
-                rx.grid(
-                    rx.card(
-                        rx.vstack(
-                            rx.text("Total Completions", size="1", color=rx.color("gray", 10)),
-                            rx.heading(ProductionState.total_completions, size="4"),
-                            spacing="0",
-                            align="center",
-                        ),
-                        padding="1em",
-                    ),
-                    rx.card(
-                        rx.vstack(
-                            rx.text("Forecast End Date", size="1", color=rx.color("gray", 10)),
-                            rx.cond(
-                                ProductionState.forecast_end_date != "",
-                                rx.text(ProductionState.forecast_end_date, weight="bold", size="2"),
-                                rx.badge("Not Set", color_scheme="red", size="1"),
-                            ),
-                            spacing="0",
-                            align="center",
-                        ),
-                        padding="1em",
-                    ),
-                    columns="2",
-                    spacing="3",
-                    width="100%",
-                ),
-                
-                # Progress section (shown when running)
-                rx.cond(
-                    ProductionState.is_batch_forecasting,
-                    batch_forecast_progress_panel(),
-                    rx.fragment(),
-                ),
-                
-                # Results section (shown after completion)
-                rx.cond(
-                    (ProductionState.batch_success_count > 0) | (ProductionState.batch_error_count > 0),
-                    batch_forecast_results_panel(),
-                    rx.fragment(),
-                ),
-                
-                # Action buttons
-                rx.flex(
-                    rx.dialog.close(
-                        rx.button("Close", variant="soft", color_scheme="gray"),
-                    ),
-                    rx.cond(
-                        ProductionState.is_batch_forecasting,
-                        rx.button(
-                            rx.icon("x", size=14),
-                            rx.text("Cancel", size="2"),
-                            on_click=ProductionState.cancel_batch_forecast,
-                            color_scheme="red",
-                            variant="soft",
-                        ),
-                        rx.button(
-                            rx.icon("play", size=14),
-                            rx.text("Start Batch Forecast", size="2"),
-                            on_click=ProductionState.run_forecast_all,
-                            color_scheme="blue",
-                            disabled=ProductionState.forecast_end_date == "",
-                        ),
-                    ),
-                    spacing="3",
-                    justify="end",
-                    width="100%",
-                ),
-                
-                spacing="4",
-                width="100%",
-            ),
-            max_width="550px",
-        ),
-    )
-
-
-def batch_forecast_progress_panel() -> rx.Component:
-    """Progress panel shown during batch forecast execution."""
-    return rx.card(
-        rx.vstack(
-            rx.hstack(
-                rx.icon("loader", size=16, color=rx.color("blue", 9)),
-                rx.text("Batch Forecast in Progress...", weight="bold", size="2"),
-                spacing="2",
-            ),
-            rx.progress(value=ProductionState.batch_progress_percent, width="100%"),
-            rx.hstack(
-                rx.text(ProductionState.batch_progress_display, size="1"),
-                rx.text("|", size="1", color=rx.color("gray", 8)),
-                rx.text(ProductionState.batch_forecast_current, size="1", color=rx.color("gray", 10)),
-                spacing="2",
-            ),
-            rx.hstack(
-                rx.badge(
-                    rx.hstack(
-                        rx.icon("check", size=12),
-                        rx.text(ProductionState.batch_success_count, size="1"),
-                        spacing="1",
-                    ),
-                    color_scheme="green",
-                    size="1",
-                ),
-                rx.badge(
-                    rx.hstack(
-                        rx.icon("x", size=12),
-                        rx.text(ProductionState.batch_error_count, size="1"),
-                        spacing="1",
-                    ),
-                    color_scheme="red",
-                    size="1",
-                ),
-                spacing="2",
-            ),
-            spacing="2",
-            width="100%",
-        ),
-        padding="1em",
-        variant="surface",
-    )
-
-
-def batch_forecast_results_panel() -> rx.Component:
-    """Results panel shown after batch forecast completion."""
-    return rx.card(
-        rx.vstack(
-            rx.hstack(
-                rx.icon("bar-chart-2", size=16, color=rx.color("green", 9)),
-                rx.text("Batch Forecast Results", weight="bold", size="2"),
-                spacing="2",
-            ),
-            rx.grid(
-                rx.vstack(
-                    rx.text("Success", size="1", color=rx.color("gray", 10)),
-                    rx.heading(ProductionState.batch_success_count, size="4", color=rx.color("green", 9)),
-                    spacing="0",
-                    align="center",
-                ),
-                rx.vstack(
-                    rx.text("Errors", size="1", color=rx.color("gray", 10)),
-                    rx.heading(ProductionState.batch_error_count, size="4", color=rx.color("red", 9)),
-                    spacing="0",
-                    align="center",
-                ),
-                rx.vstack(
-                    rx.text("Total Qoil (t)", size="1", color=rx.color("gray", 10)),
-                    rx.heading(
-                        ProductionState.batch_total_qoil.to(int).to(str),
-                        size="4",
-                        color=rx.color("blue", 9)
-                    ),
-                    spacing="0",
-                    align="center",
-                ),
-                rx.vstack(
-                    rx.text("Total Qliq (t)", size="1", color=rx.color("gray", 10)),
-                    rx.heading(
-                        ProductionState.batch_total_qliq.to(int).to(str),
-                        size="4",
-                        color=rx.color("blue", 9)
-                    ),
-                    spacing="0",
-                    align="center",
-                ),
-                columns="4",
-                spacing="3",
-                width="100%",
-            ),
-            # Show errors if any
-            rx.cond(
-                ProductionState.batch_error_count > 0,
-                rx.accordion.root(
-                    rx.accordion.item(
-                        header=rx.hstack(
-                            rx.icon("alert-triangle", size=14, color=rx.color("yellow", 9)),
-                            rx.text("View Errors", size="1"),
-                            spacing="2",
-                        ),
-                        content=rx.box(
-                            rx.foreach(
-                                ProductionState.batch_forecast_errors[:10],  # Show first 10
-                                lambda err: rx.text(err, size="1", color=rx.color("red", 10))
-                            ),
-                            max_height="150px",
-                            overflow_y="auto",
-                        ),
-                        value="errors",
-                    ),
-                    collapsible=True,
-                    type="single",
-                    width="100%",
-                ),
-                rx.fragment(),
-            ),
-            spacing="3",
-            width="100%",
-        ),
-        padding="1em",
-        variant="surface",
-    )
-
-
 def forecast_version_selector() -> rx.Component:
     """Selector for viewing different forecast versions."""
     return rx.cond(
@@ -689,307 +514,133 @@ def forecast_version_selector() -> rx.Component:
     )
 
 
-def production_history_table() -> rx.Component:
-    """Table showing production history from HistoryProd (last 24 records)."""
-    return rx.box(
-        rx.table.root(
-            rx.table.header(
-                rx.table.row(
-                    rx.table.column_header_cell(rx.text("Date", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("Oil Rate", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("Liq Rate", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("WC %", size="1", weight="bold")),
-                ),
+def batch_update_dip_dialog() -> rx.Component:
+    """Dialog for batch updating Dip for all completions on a platform."""
+    return rx.dialog.root(
+        rx.dialog.trigger(
+            rx.button(
+                rx.icon("layers", size=14),
+                rx.text("Batch Dip", size="1"),
+                variant="soft",
+                color_scheme="orange",
+                size="1",
             ),
-            rx.table.body(
-                rx.foreach(
-                    ProductionState.production_table_data,
-                    lambda row: rx.table.row(
-                        rx.table.cell(rx.text(row["Date"], size="1")),
-                        rx.table.cell(rx.text(row["OilRate"], size="1")),
-                        rx.table.cell(rx.text(row["LiqRate"], size="1")),
-                        rx.table.cell(
-                            rx.badge(
-                                row["WC"],
-                                color_scheme=rx.cond(
-                                    row["WC_val"].to(float) > 80,
-                                    "red",
-                                    rx.cond(
-                                        row["WC_val"].to(float) > 50,
-                                        "yellow",
-                                        "green"
-                                    )
-                                ),
-                                size="1"
-                            )
-                        ),
-                        style={"_hover": {"bg": rx.color("gray", 3)}},
-                    )
-                ),
-            ),
-            variant="surface",
-            size="1",
-            width="100%",
         ),
-        overflow_y="auto",
-        max_height="250px",
-        width="100%",
-    )
-
-
-def forecast_result_table() -> rx.Component:
-    """Table showing forecast results."""
-    return rx.box(
-        rx.table.root(
-            rx.table.header(
-                rx.table.row(
-                    rx.table.column_header_cell(rx.text("Date", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("Oil Rate", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("Liq Rate", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("WC %", size="1", weight="bold")),
-                ),
+        rx.dialog.content(
+            rx.dialog.title("Batch Update Platform Dip"),
+            rx.dialog.description(
+                "Update Dip value for all completions on a selected platform."
             ),
-            rx.table.body(
-                rx.foreach(
-                    ProductionState.forecast_table_data,
-                    lambda row: rx.table.row(
-                        rx.table.cell(rx.text(row["Date"], size="1")),
-                        rx.table.cell(rx.text(row["OilRate"], size="1")),
-                        rx.table.cell(rx.text(row["LiqRate"], size="1")),
-                        rx.table.cell(
-                            rx.badge(
-                                row["WC"],
-                                color_scheme=rx.cond(
-                                    row["WC_val"].to(float) > 80,
-                                    "red",
-                                    rx.cond(
-                                        row["WC_val"].to(float) > 50,
-                                        "yellow",
-                                        "green"
-                                    )
-                                ),
-                                size="1"
-                            )
+            rx.form(
+                rx.vstack(
+                    rx.select(
+                        ProductionState.unique_platforms,
+                        placeholder="Select Platform",
+                        name="platform",
+                        required=True,
+                        width="100%",
+                    ),
+                    rx.input(
+                        placeholder="New Dip value (e.g., 0.1 for 10% increase)",
+                        type="number",
+                        name="dip_value",
+                        step="0.01",
+                        required=True,
+                        width="100%",
+                    ),
+                    rx.callout(
+                        "This will update Dip for all completions on the selected platform.",
+                        icon="alert-triangle",
+                        color_scheme="yellow",
+                        size="1",
+                    ),
+                    rx.flex(
+                        rx.dialog.close(
+                            rx.button("Cancel", variant="soft", color_scheme="gray"),
                         ),
-                        style={"_hover": {"bg": rx.color("blue", 2)}},
-                    )
-                ),
-            ),
-            variant="surface",
-            size="1",
-            width="100%",
-        ),
-        overflow_y="auto",
-        max_height="250px",
-        width="100%",
-    )
-
-
-def production_rate_chart() -> rx.Component:
-    """Line chart showing production rate vs time with DCA forecast and Water Cut on secondary axis."""
-    return rx.card(
-        rx.vstack(
-            rx.hstack(
-                rx.heading("Production Rate vs Time (Exponential DCA)", size="4"),
-                rx.spacer(),
-                rx.hstack(
-                    rx.text("Show:", size="2", weight="bold"),
-                    rx.checkbox(
-                        "Oil",
-                        checked=ProductionState.show_oil,
-                        on_change=ProductionState.toggle_oil,
-                        color_scheme="green",
-                    ),
-                    rx.checkbox(
-                        "Liquid",
-                        checked=ProductionState.show_liquid,
-                        on_change=ProductionState.toggle_liquid,
-                        color_scheme="blue",
-                    ),
-                    rx.checkbox(
-                        "Water Cut",
-                        checked=ProductionState.show_wc,
-                        on_change=ProductionState.toggle_wc,
-                        color_scheme="red",
+                        rx.dialog.close(
+                            rx.button("Update All", type="submit", color_scheme="orange"),
+                        ),
+                        spacing="3",
+                        justify="end",
                     ),
                     spacing="3",
-                    align="center",
+                    width="100%",
                 ),
-                width="100%",
-                align="center",
+                on_submit=ProductionState.batch_update_dip,
             ),
-            rx.recharts.composed_chart(
-                # Actual oil rate (left Y-axis)
-                rx.cond(
-                    ProductionState.show_oil,
-                    rx.recharts.line(
-                        data_key="oilRate",
-                        name="Oil Rate (Actual)",
-                        stroke=rx.color("green", 9),
-                        dot=True,
-                        type_="monotone",
-                        connect_nulls=True,
-                        stroke_width=2,
-                        y_axis_id="left",
-                    ),
-                    rx.fragment(),
-                ),
-                # Actual liquid rate (left Y-axis)
-                rx.cond(
-                    ProductionState.show_liquid,
-                    rx.recharts.line(
-                        data_key="liqRate",
-                        name="Liq Rate (Actual)",
-                        stroke=rx.color("blue", 9),
-                        dot=True,
-                        type_="monotone",
-                        connect_nulls=True,
-                        stroke_width=2,
-                        y_axis_id="left",
-                    ),
-                    rx.fragment(),
-                ),
-                # Forecast oil rate (left Y-axis)
-                rx.cond(
-                    ProductionState.show_oil,
-                    rx.recharts.line(
-                        data_key="oilRateForecast",
-                        name="Oil Rate (Forecast)",
-                        stroke=rx.color("green", 10),
-                        stroke_dasharray="5 5",
-                        dot=False,
-                        type_="monotone",
-                        connect_nulls=True,
-                        stroke_width=2,
-                        y_axis_id="left",
-                    ),
-                    rx.fragment(),
-                ),
-                # Forecast liquid rate (left Y-axis)
-                rx.cond(
-                    ProductionState.show_liquid,
-                    rx.recharts.line(
-                        data_key="liqRateForecast",
-                        name="Liq Rate (Forecast)",
-                        stroke=rx.color("blue", 10),
-                        stroke_dasharray="5 5",
-                        dot=False,
-                        type_="monotone",
-                        connect_nulls=True,
-                        stroke_width=2,
-                        y_axis_id="left",
-                    ),
-                    rx.fragment(),
-                ),
-                # Water Cut (right Y-axis)
-                rx.cond(
-                    ProductionState.show_wc,
-                    rx.recharts.line(
-                        data_key="wc",
-                        name="Water Cut (%)",
-                        stroke=rx.color("red", 9),
-                        dot=True,
-                        type_="monotone",
-                        connect_nulls=True,
-                        stroke_width=2,
-                        y_axis_id="right",
-                    ),
-                    rx.fragment(),
-                ),
-                # Forecast Water Cut (right Y-axis)
-                rx.cond(
-                    ProductionState.show_wc,
-                    rx.recharts.line(
-                        data_key="wcForecast",
-                        name="Water Cut Forecast (%)",
-                        stroke=rx.color("red", 10),
-                        stroke_dasharray="5 5",
-                        dot=False,
-                        type_="monotone",
-                        connect_nulls=True,
-                        stroke_width=2,
-                        y_axis_id="right",
-                    ),
-                    rx.fragment(),
-                ),
-                rx.recharts.x_axis(
-                    data_key="date",
-                    angle=-45,
-                    text_anchor="end",
-                    height=80,
-                    tick={"fontSize": 11}
-                ),
-                # Left Y-axis for Rate
-                rx.recharts.y_axis(
-                    y_axis_id="left",
-                    orientation="left",
-                    label={"value": "Rate (t/day)", "angle": -90, "position": "insideLeft", "offset": 10},
-                    tick={"fontSize": 11},
-                    stroke=rx.color("gray", 9),
-                ),
-                # Right Y-axis for Water Cut
-                rx.recharts.y_axis(
-                    y_axis_id="right",
-                    orientation="right",
-                    label={"value": "Water Cut (%)", "angle": 90, "position": "insideRight", "offset": 10},
-                    tick={"fontSize": 11},
-                    domain=[0, 100],
-                    stroke=rx.color("red", 9),
-                ),
-                rx.recharts.cartesian_grid(stroke_dasharray="3 3"),
-                rx.recharts.graphing_tooltip(),
-                rx.recharts.legend(),
-                data=ProductionState.chart_data,
-                width="100%",
-                height=350,
-                margin={"bottom": 10, "left": 20, "right": 60, "top": 10},
-            ),
-            # Legend
-            rx.hstack(
-                rx.badge(
-                    rx.hstack(
-                        rx.box(width="12px", height="3px", bg=rx.color("green", 9)),
-                        rx.text("Oil (Actual)", size="1"),
-                        spacing="1",
-                    ),
-                    variant="soft",
-                ),
-                rx.badge(
-                    rx.hstack(
-                        rx.box(width="12px", height="3px", bg=rx.color("blue", 9)),
-                        rx.text("Liquid (Actual)", size="1"),
-                        spacing="1",
-                    ),
-                    variant="soft",
-                ),
-                rx.badge(
-                    rx.hstack(
-                        rx.box(width="12px", height="3px", bg=rx.color("red", 9)),
-                        rx.text("Water Cut (%)", size="1"),
-                        spacing="1",
-                    ),
-                    variant="soft",
-                ),
-                rx.badge(
-                    rx.hstack(
-                        rx.box(
-                            width="12px",
-                            height="3px",
-                            bg=rx.color("gray", 6),
-                            style={"border_top": "2px dashed"}
-                        ),
-                        rx.text("Forecast", size="1"),
-                        spacing="1",
-                    ),
-                    variant="soft",
-                ),
-                spacing="2",
-                justify="center",
-            ),
-            width="100%",
-            align="center",
-            spacing="3",
+            max_width="400px",
         ),
-        padding="1em",
-        width="100%",
+    )
+
+
+def batch_update_dir_dialog() -> rx.Component:
+    """Dialog for batch updating Dir for all completions in a reservoir+field."""
+    return rx.dialog.root(
+        rx.dialog.trigger(
+            rx.button(
+                rx.icon("git-branch", size=14),
+                rx.text("Batch Dir", size="1"),
+                variant="soft",
+                color_scheme="purple",
+                size="1",
+            ),
+        ),
+        rx.dialog.content(
+            rx.dialog.title("Batch Update Reservoir+Field Dir"),
+            rx.dialog.description(
+                "Update Dir value for all completions in a specific reservoir of a field."
+            ),
+            rx.form(
+                rx.vstack(
+                    rx.grid(
+                        rx.select(
+                            ProductionState.unique_fields,
+                            placeholder="Select Field",
+                            name="field",
+                            required=True,
+                            width="100%",
+                        ),
+                        rx.select(
+                            RESERVOIR_OPTIONS,
+                            placeholder="Select Reservoir",
+                            name="reservoir",
+                            required=True,
+                            width="100%",
+                        ),
+                        columns="2",
+                        spacing="3",
+                        width="100%",
+                    ),
+                    rx.input(
+                        placeholder="New Dir value (e.g., -0.05 for 5% decrease)",
+                        type="number",
+                        name="dir_value",
+                        step="0.01",
+                        required=True,
+                        width="100%",
+                    ),
+                    rx.callout(
+                        "This will update Dir for all completions in the selected reservoir and field.",
+                        icon="alert-triangle",
+                        color_scheme="yellow",
+                        size="1",
+                    ),
+                    rx.flex(
+                        rx.dialog.close(
+                            rx.button("Cancel", variant="soft", color_scheme="gray"),
+                        ),
+                        rx.dialog.close(
+                            rx.button("Update All", type="submit", color_scheme="purple"),
+                        ),
+                        spacing="3",
+                        justify="end",
+                    ),
+                    spacing="3",
+                    width="100%",
+                ),
+                on_submit=ProductionState.batch_update_dir,
+            ),
+            max_width="450px",
+        ),
     )
