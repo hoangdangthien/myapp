@@ -1,30 +1,72 @@
 """Reusable components for GTM App."""
-from .sidebar import sidebar
-from .form_fields import form_field, select_field
-from .gtm_dialogs import add_gtm_button, update_gtm_dialog, delete_gtm_dialog, load_excel_button, search_gtm
-from .gtm_table import gtm_table, show_intervention, production_record_table, forecast_result_table, history_stats_card
-from .gtm_charts import gtm_type_chart, stats_cards, production_rate_chart
-from .summary_tables import (
-    current_year_summary_table,
-    next_year_summary_table,
-    summary_section,
-    download_all_button,
+# Shared components
+from .shared_tables import (
+    production_table_header,
+    wc_badge,
+    status_badge,
+    scrollable_table_container,
+    history_table_row,
+    forecast_table_row,
+    create_history_table,
+    create_forecast_table,
+    stats_info_card,
+    version_selector,
+    loading_spinner,
+    empty_state,
 )
-from .production_components import (
-    completion_filter_controls,
-    completion_table,
-    completion_stats_summary,
-    selected_completion_info,
-    forecast_version_selector,
-    update_completion_dialog,
-    forecast_controls,
-    production_history_table,
-    forecast_result_table as prod_forecast_result_table,
-    production_rate_chart as prod_production_rate_chart,
+
+from .shared_charts import (
+    chart_toggle_controls,
+    dual_axis_line_chart,
+    chart_legend,
+    production_chart_card,
+    bar_chart_simple,
 )
-from .production_tables import (
-    forecast_controls as prod_tables_forecast_controls,
-    production_history_table as prod_tables_history_table,
-    forecast_result_table as prod_tables_forecast_table,
-    production_rate_chart as prod_tables_rate_chart,
-)
+
+# Original components (import only if they exist)
+try:
+    from .sidebar import sidebar
+except ImportError:
+    pass
+
+try:
+    from .form_fields import form_field, select_field
+except ImportError:
+    pass
+
+try:
+    from .gtm_dialogs import (
+        add_gtm_button, 
+        update_gtm_dialog, 
+        delete_gtm_dialog, 
+        load_excel_button, 
+        search_gtm
+    )
+except ImportError:
+    pass
+
+try:
+    from .gtm_table import (
+        gtm_table, 
+        show_intervention, 
+        production_record_table, 
+        forecast_result_table, 
+        history_stats_card
+    )
+except ImportError:
+    pass
+
+try:
+    from .gtm_charts import gtm_type_chart, stats_cards, production_rate_chart
+except ImportError:
+    pass
+
+try:
+    from .summary_tables import (
+        current_year_summary_table,
+        next_year_summary_table,
+        summary_section,
+        download_all_button,
+    )
+except ImportError:
+    pass

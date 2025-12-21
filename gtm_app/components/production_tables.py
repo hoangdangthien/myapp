@@ -1,6 +1,23 @@
-"""Table and control components for Production page."""
+"""Refactored table and control components for Production page.
+
+Uses shared components for consistent styling.
+"""
 import reflex as rx
 from ..states.production_state import ProductionState
+from .shared_tables import (
+    create_history_table,
+    create_forecast_table,
+    scrollable_table_container,
+    version_selector,
+    stats_info_card,
+    empty_state,
+    loading_spinner,
+)
+from .shared_charts import (
+    chart_toggle_controls,
+    dual_axis_line_chart,
+    production_chart_card,
+)
 
 
 def forecast_controls() -> rx.Component:
@@ -33,7 +50,6 @@ def forecast_controls() -> rx.Component:
             on_click=ProductionState.run_forecast,
             size="2",
         ),
-        # Run All Button
         run_all_forecast_button(),
         spacing="3",
         align="end",
@@ -69,7 +85,6 @@ def run_all_forecast_button() -> rx.Component:
                 )
             ),
             rx.vstack(
-                # Requirements check
                 rx.callout(
                     rx.vstack(
                         rx.text("Before running:", weight="bold", size="2"),
@@ -83,28 +98,22 @@ def run_all_forecast_button() -> rx.Component:
                     color_scheme="blue",
                     size="1",
                 ),
-                
-                # Stats
                 rx.grid(
+                    stats_info_card("Total Completions", ProductionState.total_completions, "layers", "blue"),
                     rx.card(
                         rx.vstack(
-                            rx.text("Total Completions", size="1", color=rx.color("gray", 10)),
-                            rx.heading(ProductionState.total_completions, size="4"),
-                            spacing="0",
-                            align="center",
-                        ),
-                        padding="1em",
-                    ),
-                    rx.card(
-                        rx.vstack(
-                            rx.text("Forecast End Date", size="1", color=rx.color("gray", 10)),
+                            rx.hstack(
+                                rx.icon("calendar", size=18, color=rx.color("orange", 9)),
+                                rx.text("Forecast End Date", size="1", weight="bold"),
+                                spacing="2",
+                            ),
                             rx.cond(
                                 ProductionState.forecast_end_date != "",
                                 rx.text(ProductionState.forecast_end_date, weight="bold", size="2"),
                                 rx.badge("Not Set", color_scheme="red", size="1"),
                             ),
-                            spacing="0",
-                            align="center",
+                            spacing="1",
+                            align="start",
                         ),
                         padding="1em",
                     ),
@@ -112,22 +121,16 @@ def run_all_forecast_button() -> rx.Component:
                     spacing="3",
                     width="100%",
                 ),
-                
-                # Progress section (shown when running)
                 rx.cond(
                     ProductionState.is_batch_forecasting,
                     batch_progress_panel(),
                     rx.fragment(),
                 ),
-                
-                # Results section (shown after completion)
                 rx.cond(
                     (ProductionState.batch_success_count > 0) | (ProductionState.batch_error_count > 0),
                     batch_results_panel(),
                     rx.fragment(),
                 ),
-                
-                # Action buttons
                 rx.flex(
                     rx.dialog.close(
                         rx.button("Close", variant="soft", color_scheme="gray"),
@@ -153,7 +156,6 @@ def run_all_forecast_button() -> rx.Component:
                     justify="end",
                     width="100%",
                 ),
-                
                 spacing="4",
                 width="100%",
             ),
@@ -167,7 +169,7 @@ def batch_progress_panel() -> rx.Component:
     return rx.card(
         rx.vstack(
             rx.hstack(
-                rx.icon("loader", size=16, color=rx.color("blue", 9)),
+                rx.spinner(size="2"),
                 rx.text("Batch Forecast in Progress...", weight="bold", size="2"),
                 spacing="2",
             ),
@@ -231,21 +233,13 @@ def batch_results_panel() -> rx.Component:
                 ),
                 rx.vstack(
                     rx.text("Total Qoil (t)", size="1", color=rx.color("gray", 10)),
-                    rx.heading(
-                        ProductionState.batch_total_qoil_display,
-                        size="4",
-                        color=rx.color("blue", 9)
-                    ),
+                    rx.heading(ProductionState.batch_total_qoil_display, size="4", color=rx.color("blue", 9)),
                     spacing="0",
                     align="center",
                 ),
                 rx.vstack(
                     rx.text("Total Qliq (t)", size="1", color=rx.color("gray", 10)),
-                    rx.heading(
-                        ProductionState.batch_total_qliq_display,
-                        size="4",
-                        color=rx.color("blue", 9)
-                    ),
+                    rx.heading(ProductionState.batch_total_qliq_display, size="4", color=rx.color("blue", 9)),
                     spacing="0",
                     align="center",
                 ),
@@ -253,7 +247,6 @@ def batch_results_panel() -> rx.Component:
                 spacing="3",
                 width="100%",
             ),
-            # Show errors if any
             rx.cond(
                 ProductionState.batch_error_count > 0,
                 rx.accordion.root(
@@ -266,7 +259,7 @@ def batch_results_panel() -> rx.Component:
                         content=rx.box(
                             rx.foreach(
                                 ProductionState.batch_errors_display,
-                                _render_error_text,
+                                lambda err: rx.text(err, size="1", color=rx.color("red", 10))
                             ),
                             max_height="150px",
                             overflow_y="auto",
@@ -287,153 +280,49 @@ def batch_results_panel() -> rx.Component:
     )
 
 
-def _render_error_text(err: str) -> rx.Component:
-    """Render error text item."""
-    return rx.text(err, size="1", color=rx.color("red", 10))
-
-
 def production_history_table() -> rx.Component:
     """Table showing production history from HistoryProd (last 24 records)."""
-    return rx.box(
-        rx.table.root(
-            rx.table.header(
-                rx.table.row(
-                    rx.table.column_header_cell(rx.text("Date", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("Oil Rate", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("Liq Rate", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("WC %", size="1", weight="bold")),
-                ),
-            ),
-            rx.table.body(
-                rx.foreach(
-                    ProductionState.production_table_data,
-                    _render_history_row,
-                ),
-            ),
-            variant="surface",
-            size="1",
-            width="100%",
-        ),
-        overflow_y="auto",
-        max_height="250px",
-        width="100%",
-    )
-
-
-def _render_history_row(row: dict) -> rx.Component:
-    """Render a single history table row."""
-    return rx.table.row(
-        rx.table.cell(rx.text(row["Date"], size="1")),
-        rx.table.cell(rx.text(row["OilRate"], size="1")),
-        rx.table.cell(rx.text(row["LiqRate"], size="1")),
-        rx.table.cell(
-            rx.badge(
-                row["WC"],
-                color_scheme=rx.cond(
-                    row["WC_val"].to(float) > 80,
-                    "red",
-                    rx.cond(row["WC_val"].to(float) > 50, "yellow", "green")
-                ),
-                size="1"
-            )
-        ),
-        style={"_hover": {"bg": rx.color("gray", 3)}},
+    return scrollable_table_container(
+        create_history_table(ProductionState.production_table_data),
+        max_height="250px"
     )
 
 
 def forecast_result_table() -> rx.Component:
     """Table showing forecast results with cumulative production."""
-    return rx.box(
-        rx.table.root(
-            rx.table.header(
-                rx.table.row(
-                    rx.table.column_header_cell(rx.text("Date", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("Oil Rate", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("Liq Rate", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("Qoil (t)", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("Qliq (t)", size="1", weight="bold")),
-                    rx.table.column_header_cell(rx.text("WC %", size="1", weight="bold")),
-                ),
-            ),
-            rx.table.body(
-                rx.foreach(
-                    ProductionState.forecast_table_data,
-                    _render_forecast_row,
-                ),
-            ),
-            variant="surface",
-            size="1",
-            width="100%",
+    return scrollable_table_container(
+        create_forecast_table(
+            ProductionState.forecast_table_data,
+            show_cumulative=True,
+            columns=["Date", "Oil Rate", "Liq Rate", "Qoil (t)", "Qliq (t)", "WC %"]
         ),
-        overflow_y="auto",
-        max_height="250px",
-        width="100%",
-    )
-
-
-def _render_forecast_row(row: dict) -> rx.Component:
-    """Render a single forecast table row."""
-    return rx.table.row(
-        rx.table.cell(rx.text(row["Date"], size="1")),
-        rx.table.cell(rx.text(row["OilRate"], size="1")),
-        rx.table.cell(rx.text(row["LiqRate"], size="1")),
-        rx.table.cell(rx.badge(row["Qoil"], color_scheme="green", size="1")),
-        rx.table.cell(rx.badge(row["Qliq"], color_scheme="blue", size="1")),
-        rx.table.cell(
-            rx.badge(
-                row["WC"],
-                color_scheme=rx.cond(
-                    row["WC_val"].to(float) > 80,
-                    "red",
-                    rx.cond(row["WC_val"].to(float) > 50, "yellow", "green")
-                ),
-                size="1"
-            )
-        ),
-        style={"_hover": {"bg": rx.color("blue", 2)}},
+        max_height="250px"
     )
 
 
 def production_rate_chart() -> rx.Component:
     """Line chart showing production rate vs time with DCA forecast and Water Cut."""
-    return rx.card(
-        rx.vstack(
-            rx.hstack(
-                rx.heading("Production Rate vs Time (Exponential DCA)", size="4"),
-                rx.spacer(),
-                rx.hstack(
-                    rx.text("Show:", size="2", weight="bold"),
-                    rx.checkbox("Oil", checked=ProductionState.show_oil, on_change=ProductionState.toggle_oil, color_scheme="green"),
-                    rx.checkbox("Liquid", checked=ProductionState.show_liquid, on_change=ProductionState.toggle_liquid, color_scheme="blue"),
-                    rx.checkbox("Water Cut", checked=ProductionState.show_wc, on_change=ProductionState.toggle_wc, color_scheme="red"),
-                    spacing="3",
-                    align="center",
-                ),
-                width="100%",
-                align="center",
-            ),
-            rx.recharts.composed_chart(
-                rx.cond(ProductionState.show_oil, rx.recharts.line(data_key="oilRate", name="Oil Rate (Actual)", stroke=rx.color("green", 9), dot=True, type_="monotone", connect_nulls=True, stroke_width=2, y_axis_id="left"), rx.fragment()),
-                rx.cond(ProductionState.show_liquid, rx.recharts.line(data_key="liqRate", name="Liq Rate (Actual)", stroke=rx.color("blue", 9), dot=True, type_="monotone", connect_nulls=True, stroke_width=2, y_axis_id="left"), rx.fragment()),
-                rx.cond(ProductionState.show_oil, rx.recharts.line(data_key="oilRateForecast", name="Oil Rate (Forecast)", stroke=rx.color("green", 10), stroke_dasharray="5 5", dot=False, type_="monotone", connect_nulls=True, stroke_width=2, y_axis_id="left"), rx.fragment()),
-                rx.cond(ProductionState.show_liquid, rx.recharts.line(data_key="liqRateForecast", name="Liq Rate (Forecast)", stroke=rx.color("blue", 10), stroke_dasharray="5 5", dot=False, type_="monotone", connect_nulls=True, stroke_width=2, y_axis_id="left"), rx.fragment()),
-                rx.cond(ProductionState.show_wc, rx.recharts.line(data_key="wc", name="Water Cut (%)", stroke=rx.color("red", 9), dot=True, type_="monotone", connect_nulls=True, stroke_width=2, y_axis_id="right"), rx.fragment()),
-                rx.cond(ProductionState.show_wc, rx.recharts.line(data_key="wcForecast", name="Water Cut Forecast (%)", stroke=rx.color("red", 10), stroke_dasharray="5 5", dot=False, type_="monotone", connect_nulls=True, stroke_width=2, y_axis_id="right"), rx.fragment()),
-                rx.recharts.x_axis(data_key="date", angle=-45, text_anchor="end", height=80, tick={"fontSize": 11}),
-                rx.recharts.y_axis(y_axis_id="left", orientation="left", label={"value": "Rate (t/day)", "angle": -90, "position": "insideLeft", "offset": 10}, tick={"fontSize": 11}, stroke=rx.color("gray", 9)),
-                rx.recharts.y_axis(y_axis_id="right", orientation="right", label={"value": "Water Cut (%)", "angle": 90, "position": "insideRight", "offset": 10}, tick={"fontSize": 11}, domain=[0, 100], stroke=rx.color("red", 9)),
-                rx.recharts.cartesian_grid(stroke_dasharray="3 3"),
-                rx.recharts.graphing_tooltip(),
-                rx.recharts.legend(),
-                data=ProductionState.chart_data,
-                width="100%",
-                height=350,
-                margin={"bottom": 10, "left": 20, "right": 60, "top": 10},
-            ),
-            width="100%",
-            align="center",
-            spacing="3",
-        ),
-        padding="1em",
-        width="100%",
+    toggle_controls = chart_toggle_controls(
+        show_oil=ProductionState.show_oil,
+        show_liquid=ProductionState.show_liquid,
+        show_wc=ProductionState.show_wc,
+        toggle_oil=ProductionState.toggle_oil,
+        toggle_liquid=ProductionState.toggle_liquid,
+        toggle_wc=ProductionState.toggle_wc,
+    )
+    
+    chart = dual_axis_line_chart(
+        data=ProductionState.chart_data,
+        show_oil=ProductionState.show_oil,
+        show_liquid=ProductionState.show_liquid,
+        show_wc=ProductionState.show_wc,
+        height=350,
+        show_forecast=True,
+    )
+    
+    return production_chart_card(
+        title="Production Rate vs Time (Exponential DCA)",
+        chart_component=chart,
+        toggle_controls=toggle_controls,
+        show_legend=True
     )
