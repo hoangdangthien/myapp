@@ -1,4 +1,5 @@
 """States package for GTM App."""
-from .base_state import BaseState
+
+from .shared_state import SharedForecastState
 from .gtm_state import GTMState
 from .production_state import ProductionState

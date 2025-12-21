@@ -1,155 +1,78 @@
-"""State management for Production page with DCA forecasting - Using elapsed days pattern."""
+"""Refactored Production State using DCA Service and Shared State.
+
+This state manages Production monitoring and forecasting with improved
+code organization using service classes.
+
+DCA Formula: q(t) = qi * exp(-di * 12/365 * t)
+Cumulative: Qoil = OilRate * K_oil * days_in_month
+"""
 import reflex as rx
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, List, Tuple
 from datetime import datetime, timedelta
-import numpy as np
-import pandas as pd
 from sqlmodel import select, delete, func, desc
 
 from ..models import (
-    CompletionID, 
-    HistoryProd, 
-    ProductionForecast, 
+    CompletionID,
+    HistoryProd,
+    ProductionForecast,
     Intervention,
     InterventionForecast,
-    KMonth,
     MAX_PRODUCTION_FORECAST_VERSIONS
 )
-from ..utils.dca_utils import (
-    arps_exponential,
-    arps_decline,
-    generate_forecast_dates,
-    calculate_water_cut,
-    run_dca_forecast,
-    ForecastPoint,
-)
+from ..services.dca_service import DCAService, ForecastConfig, ForecastResult
+from ..services.database_service import DatabaseService
+from .shared_state import SharedForecastState
 
 
-class ProductionState(rx.State):
+class ProductionState(SharedForecastState):
     """State for Production monitoring and forecasting.
     
-    DCA Formula: q(t) = qi * exp(-di * 12/365 * t)
-    Where:
-    - qi = Initial rate (t/day)
-    - di = Decline rate (1/year)  
-    - t = Elapsed days from start
-    
-    Cumulative: Qoil = OilRate * K_oil * days_in_month
+    Inherits common functionality from SharedForecastState.
     """
     
-    # CompletionID data (cached)
-    completions: list[CompletionID] = []
-    _all_completions: list[CompletionID] = []
+    # CompletionID data
+    completions: List[CompletionID] = []
+    _all_completions: List[CompletionID] = []
     
     selected_completion: Optional[CompletionID] = None
     selected_unique_id: str = ""
-    available_unique_ids: list[str] = []
-    
-    # Current completion for editing
+    available_unique_ids: List[str] = []
     current_completion: Optional[CompletionID] = None
-    
-    # History production data (last 5 years)
-    history_prod: list[dict] = []
-    
-    # KMonth data cache {month_id: {K_oil, K_liq, K_int, K_inj}}
-    k_month_data: dict = {}
-    
-    # Forecast parameters and results
-    forecast_end_date: str = ""
-    forecast_data: list[dict] = []
-    
-    # Chart data combining actual + forecast
-    chart_data: list[dict] = []
-    
-    # Current forecast version
-    current_forecast_version: int = 0
-    available_forecast_versions: list[int] = []
-    
-    # Phase display toggles
-    show_oil: bool = True
-    show_liquid: bool = True
-    show_wc: bool = True
-    
-    # Search/filter
-    search_value: str = ""
-    selected_reservoir: str = ""
     
     # DCA parameters from CompletionID
     qi_oil: float = 0.0
     qi_liq: float = 0.0
-    dio: float = 0.0  # Decline rate for oil (1/year)
-    dil: float = 0.0  # Decline rate for liquid (1/year)
-    b_oil: float = 0.0  # Decline exponent for oil
-    b_liq: float = 0.0  # Decline exponent for liquid
+    dio: float = 0.0
+    dil: float = 0.0
+    b_oil: float = 0.0
+    b_liq: float = 0.0
     
     # Intervention status
     has_planned_intervention: bool = False
     intervention_info: str = ""
     
+    # Search/filter
+    search_value: str = ""
+    selected_reservoir: str = ""
+    
     # Loading states
     is_loading_completions: bool = False
     is_loading_production: bool = False
-    
-    # DCA mode selection (True=Exponential, False=Hyperbolic)
-    use_exponential_dca: bool = True
     
     # ========== Batch Forecast State ==========
     is_batch_forecasting: bool = False
     batch_forecast_progress: int = 0
     batch_forecast_total: int = 0
     batch_forecast_current: str = ""
-    batch_forecast_results: list[dict] = []
-    batch_forecast_errors: list[str] = []
+    batch_forecast_results: List[dict] = []
+    batch_forecast_errors: List[str] = []
     batch_forecast_cancelled: bool = False
-    
-    def toggle_oil(self, checked: bool):
-        self.show_oil = checked
-    
-    def toggle_liquid(self, checked: bool):
-        self.show_liquid = checked
-    
-    def toggle_wc(self, checked: bool):
-        self.show_wc = checked
-    
-    def set_dca_mode(self, use_exponential: bool):
-        """Toggle between Exponential and Hyperbolic DCA."""
-        self.use_exponential_dca = use_exponential
-
-    def load_k_month_data(self):
-        """Load KMonth data from database and cache it."""
-        try:
-            with rx.session() as session:
-                k_records = session.exec(select(KMonth)).all()
-                self.k_month_data = {
-                    rec.MonthID: {
-                        "K_oil": rec.K_oil if rec.K_oil else 1.0,
-                        "K_liq": rec.K_liq if rec.K_liq else 1.0,
-                        "K_int": rec.K_int if rec.K_int else 1.0,
-                        "K_inj": rec.K_inj if rec.K_inj else 1.0
-                    }
-                    for rec in k_records
-                }
-                
-            # If no KMonth data, use defaults
-            if not self.k_month_data:
-                self.k_month_data = {
-                    i: {"K_oil": 1.0, "K_liq": 1.0, "K_int": 1.0, "K_inj": 1.0} 
-                    for i in range(1, 13)
-                }
-        except Exception as e:
-            print(f"Error loading KMonth data: {e}")
-            self.k_month_data = {
-                i: {"K_oil": 1.0, "K_liq": 1.0, "K_int": 1.0, "K_inj": 1.0} 
-                for i in range(1, 13)
-            }
 
     def load_completions(self):
         """Load all completions from CompletionID table."""
         try:
             self.is_loading_completions = True
-            
-            # Load KMonth data first
-            self.load_k_month_data()
+            self._load_k_month_data()
             
             with rx.session() as session:
                 self._all_completions = session.exec(select(CompletionID)).all()
@@ -184,10 +107,12 @@ class ProductionState(rx.State):
         self.available_unique_ids = [c.UniqueId for c in self.completions]
 
     def filter_completions(self, search_value: str):
+        """Filter completions by search term."""
         self.search_value = search_value
         self._apply_filters()
 
     def filter_by_reservoir(self, reservoir: str):
+        """Filter by selected reservoir."""
         self.selected_reservoir = reservoir if reservoir != "All Reservoirs" else ""
         self._apply_filters()
 
@@ -205,51 +130,37 @@ class ProductionState(rx.State):
             
             with rx.session() as session:
                 completion_to_update = session.exec(
-                    select(CompletionID).where(
-                        CompletionID.UniqueId == unique_id
-                    )
+                    select(CompletionID).where(CompletionID.UniqueId == unique_id)
                 ).first()
                 
                 if not completion_to_update:
                     return rx.toast.error(f"Completion '{unique_id}' not found")
                 
-                # Update Do (oil decline rate)
-                do_value = form_data.get("Do")
-                if do_value is not None and str(do_value).strip() != "":
-                    try:
-                        completion_to_update.Do = float(do_value)
-                    except (ValueError, TypeError) as e:
-                        print(f"Warning: Could not convert Do='{do_value}' to float: {e}")
-                
-                # Update Dl (liquid decline rate)
-                dl_value = form_data.get("Dl")
-                if dl_value is not None and str(dl_value).strip() != "":
-                    try:
-                        completion_to_update.Dl = float(dl_value)
-                    except (ValueError, TypeError) as e:
-                        print(f"Warning: Could not convert Dl='{dl_value}' to float: {e}")
+                for field in ["Do", "Dl"]:
+                    value = form_data.get(field)
+                    if value is not None and str(value).strip() != "":
+                        try:
+                            setattr(completion_to_update, field, float(value))
+                        except (ValueError, TypeError) as e:
+                            print(f"Warning: Could not convert {field}='{value}' to float: {e}")
                 
                 session.add(completion_to_update)
                 session.commit()
                 session.refresh(completion_to_update)
                 self.current_completion = completion_to_update
             
-            # Reload completions to reflect changes
-            self._all_completions = []  # Clear cache to force reload
+            self._all_completions = []
             self.load_completions()
             
-            # Update selected completion if it was the one updated
             if self.selected_unique_id == unique_id:
                 self.selected_completion = self.current_completion
                 self.dio = self.current_completion.Do if self.current_completion.Do else 0.0
                 self.dil = self.current_completion.Dl if self.current_completion.Dl else 0.0
             
-            return rx.toast.success(f"Completion '{unique_id}' updated: Do={completion_to_update.Do}, Dl={completion_to_update.Dl}")
+            return rx.toast.success(f"Completion '{unique_id}' updated")
             
         except Exception as e:
             print(f"Update error: {e}")
-            import traceback
-            traceback.print_exc()
             return rx.toast.error(f"Failed to update completion: {str(e)}")
 
     def set_selected_unique_id(self, unique_id: str):
@@ -273,9 +184,9 @@ class ProductionState(rx.State):
             self.dil = self.selected_completion.Dl if self.selected_completion.Dl else 0.0
         
         return ProductionState.load_production_data_background
-    #@rx.event(background=True)
+
     async def load_production_data_background(self):
-        
+        """Load production data in background."""
         async with self:
             self.is_loading_production = True
         
@@ -287,36 +198,14 @@ class ProductionState(rx.State):
             if not unique_id:
                 return
             
-            five_years_ago = datetime.now() - timedelta(days=5*365)
-            
             history_data = []
             forecast_versions = []
             has_intervention = False
             intervention_text = ""
             
             with rx.session() as session:
-                history_records = session.exec(
-                    select(HistoryProd).where(
-                        HistoryProd.UniqueId == unique_id,
-                        HistoryProd.Date >= five_years_ago
-                    ).order_by(desc(HistoryProd.Date))
-                ).all()
-                
-                for rec in history_records:
-                    oil_rate = rec.OilRate if rec.OilRate else 0.0
-                    liq_rate = rec.LiqRate if rec.LiqRate else 0.0
-                    wc = calculate_water_cut(oil_rate, liq_rate)
-                    
-                    history_data.append({
-                        "UniqueId": rec.UniqueId,
-                        "Date": rec.Date,
-                        "OilRate": oil_rate,
-                        "LiqRate": liq_rate,
-                        "WC": round(wc, 2),
-                        "GOR": rec.GOR if rec.GOR else 0.0,
-                        "Dayon": rec.Dayon if rec.Dayon else 0.0,
-                        "Method": rec.Method if rec.Method else ""
-                    })
+                # Load history using service
+                history_data = DCAService.load_history_data(session, unique_id, years=5)
                 
                 # Check for planned intervention
                 intervention = session.exec(
@@ -331,17 +220,15 @@ class ProductionState(rx.State):
                     intervention_text = f"{intervention.TypeGTM} planned on {intervention.PlanningDate}"
                 
                 # Load forecast versions
-                forecast_versions = list(session.exec(
-                    select(ProductionForecast.Version).where(
-                        ProductionForecast.UniqueId == unique_id
-                    ).distinct()
-                ).all())
+                forecast_versions = DatabaseService.get_available_versions(
+                    session, ProductionForecast, unique_id, min_version=1
+                )
             
             async with self:
                 self.history_prod = history_data
                 self.has_planned_intervention = has_intervention
                 self.intervention_info = intervention_text
-                self.available_forecast_versions = sorted(forecast_versions)
+                self.available_forecast_versions = forecast_versions
                 
                 # Calculate qi from last history record
                 if self.history_prod:
@@ -360,7 +247,7 @@ class ProductionState(rx.State):
             
             async with self:
                 if self.current_forecast_version > 0:
-                    await self._load_forecast_data()
+                    self._load_forecast_from_db()
                 self._update_chart_data()
                 
         except Exception as e:
@@ -369,217 +256,39 @@ class ProductionState(rx.State):
                 self.history_prod = []
                 self.is_loading_production = False
 
-    async def _load_forecast_data(self):
-        """Load forecast data for current version."""
+    def _load_forecast_from_db(self):
+        """Load forecast data for current version from database."""
         if not self.selected_unique_id or self.current_forecast_version == 0:
             self.forecast_data = []
             return
         
         try:
             with rx.session() as session:
-                forecast_records = session.exec(
-                    select(ProductionForecast).where(
-                        ProductionForecast.UniqueId == self.selected_unique_id,
-                        ProductionForecast.Version == self.current_forecast_version
-                    ).order_by(ProductionForecast.Date)
-                ).all()
-                
-                self.forecast_data = [
-                    {
-                        "date": rec.Date.strftime("%Y-%m-%d") if isinstance(rec.Date, datetime) else str(rec.Date),
-                        "oilRate": rec.OilRate,
-                        "liqRate": rec.LiqRate,
-                        "qOil": rec.Qoil,
-                        "qLiq": rec.Qliq,
-                        "wc": rec.WC
-                    }
-                    for rec in forecast_records
-                ]
+                self.forecast_data = DatabaseService.load_forecast_by_version(
+                    session, ProductionForecast, self.selected_unique_id, self.current_forecast_version
+                )
         except Exception as e:
             print(f"Error loading forecast: {e}")
             self.forecast_data = []
 
     def load_forecast_from_db(self):
-        """Load forecast data synchronously."""
-        if not self.selected_unique_id or self.current_forecast_version == 0:
-            self.forecast_data = []
-            return
-        
-        try:
-            with rx.session() as session:
-                forecast_records = session.exec(
-                    select(ProductionForecast).where(
-                        ProductionForecast.UniqueId == self.selected_unique_id,
-                        ProductionForecast.Version == self.current_forecast_version
-                    ).order_by(ProductionForecast.Date)
-                ).all()
-                
-                self.forecast_data = [
-                    {
-                        "date": rec.Date.strftime("%Y-%m-%d") if isinstance(rec.Date, datetime) else str(rec.Date),
-                        "oilRate": rec.OilRate,
-                        "liqRate": rec.LiqRate,
-                        "qOil": rec.Qoil,
-                        "qLiq": rec.Qliq,
-                        "wc": rec.WC
-                    }
-                    for rec in forecast_records
-                ]
-        except Exception as e:
-            print(f"Error loading forecast: {e}")
-            self.forecast_data = []
+        """Public method to load forecast data synchronously."""
+        self._load_forecast_from_db()
 
     def set_forecast_version(self, version: int):
+        """Set and load a specific forecast version."""
         self.current_forecast_version = version
         self.load_forecast_from_db()
         self._update_chart_data()
 
     def set_forecast_version_from_str(self, version_str: str):
+        """Set forecast version from string (e.g., "v1")."""
         if version_str and version_str.startswith("v"):
             version = int(version_str[1:])
             self.set_forecast_version(version)
 
-    def set_forecast_end_date(self, date: str):
-        self.forecast_end_date = date
-
-    def _update_chart_data(self):
-        """Update chart data combining actual history and forecast with Water Cut."""
-        chart_points = []
-        
-        sorted_history = sorted(self.history_prod, key=lambda x: x["Date"])
-        for prod in sorted_history:
-            date_val = prod["Date"]
-            date_str = date_val.strftime("%Y-%m-%d") if isinstance(date_val, datetime) else str(date_val)
-            chart_points.append({
-                "date": date_str,
-                "oilRate": prod["OilRate"],
-                "liqRate": prod["LiqRate"],
-                "wc": prod["WC"],
-                "type": "actual"
-            })
-        
-        for fc in self.forecast_data:
-            wc_forecast = calculate_water_cut(fc["oilRate"], fc["liqRate"])
-            
-            chart_points.append({
-                "date": fc["date"],
-                "oilRateForecast": fc["oilRate"],
-                "liqRateForecast": fc["liqRate"],
-                "wcForecast": round(wc_forecast, 2),
-                "type": "forecast"
-            })
-        
-        self.chart_data = chart_points
-
-    def _get_next_forecast_version(self, session, unique_id: str) -> int:
-        """Determine next forecast version using FIFO logic (max 4 versions)."""
-        existing_versions = session.exec(
-            select(ProductionForecast.Version, func.min(ProductionForecast.CreatedAt))
-            .where(ProductionForecast.UniqueId == unique_id)
-            .group_by(ProductionForecast.Version)
-        ).all()
-        
-        if not existing_versions:
-            return 1
-        
-        used_versions = [v[0] for v in existing_versions]
-        
-        if len(used_versions) < MAX_PRODUCTION_FORECAST_VERSIONS:
-            for v in range(1, MAX_PRODUCTION_FORECAST_VERSIONS + 1):
-                if v not in used_versions:
-                    return v
-        
-        oldest_version = min(existing_versions, key=lambda x: x[1])[0]
-        
-        session.exec(
-            delete(ProductionForecast).where(
-                ProductionForecast.UniqueId == unique_id,
-                ProductionForecast.Version == oldest_version
-            )
-        )
-        session.commit()
-        
-        return oldest_version
-
-    def _save_forecast_to_production_table(
-        self, 
-        unique_id: str, 
-        forecast_points: list[ForecastPoint]
-    ) -> int:
-        """Save forecast to ProductionForecast table with FIFO version control."""
-        try:
-            with rx.session() as session:
-                version = self._get_next_forecast_version(session, unique_id)
-                created_at = datetime.now()
-                
-                for fp in forecast_points:
-                    prod_record = ProductionForecast(
-                        UniqueId=unique_id,
-                        Date=fp.date,
-                        Version=version,
-                        OilRate=fp.oil_rate,
-                        LiqRate=fp.liq_rate,
-                        Qoil=fp.q_oil,
-                        Qliq=fp.q_liq,
-                        WC=fp.wc,
-                        CreatedAt=created_at
-                    )
-                    session.add(prod_record)
-                
-                session.commit()
-                return version
-                
-        except Exception as e:
-            print(f"Error saving forecast: {e}")
-            raise
-
-    def _save_to_intervention_prod(
-        self, 
-        unique_id: str, 
-        forecast_points: list[ForecastPoint]
-    ):
-        """Save forecast to InterventionForecast table as version 0."""
-        try:
-            with rx.session() as session:
-                session.exec(
-                    delete(InterventionForecast).where(
-                        InterventionForecast.UniqueId == unique_id,
-                        InterventionForecast.Version == 0
-                    )
-                )
-                session.commit()
-                
-                created_at = datetime.now()
-                
-                for fp in forecast_points:
-                    intervention_record = InterventionForecast(
-                        UniqueId=unique_id,
-                        Date=fp.date,
-                        Version=0,
-                        DataType="Forecast",
-                        OilRate=fp.oil_rate,
-                        LiqRate=fp.liq_rate,
-                        Qoil=fp.q_oil,
-                        Qliq=fp.q_liq,
-                        WC=fp.wc,
-                        CreatedAt=created_at
-                    )
-                    session.add(intervention_record)
-                
-                session.commit()
-                
-        except Exception as e:
-            print(f"Error saving to InterventionForecast: {e}")
-            raise
-
     def run_forecast(self):
-        """Run DCA forecast using elapsed days pattern.
-        
-        Formula: q(t) = qi * exp(-di * 12/365 * t)
-        Where t is elapsed days from start date.
-        
-        Cumulative: Qoil = OilRate * K_oil * days_in_month
-        """
+        """Run DCA forecast using service."""
         if not self.selected_completion or not self.forecast_end_date:
             return rx.toast.error("Please select a completion and set forecast end date")
         
@@ -592,7 +301,6 @@ class ProductionState(rx.State):
         try:
             end_date = datetime.strptime(self.forecast_end_date, "%Y-%m-%d")
             
-            # Get start date from last production record
             sorted_history = sorted(self.history_prod, key=lambda x: x["Date"])
             last_prod = sorted_history[-1]
             
@@ -604,64 +312,58 @@ class ProductionState(rx.State):
             if end_date <= start_date:
                 return rx.toast.error(f"End date must be after {start_date.strftime('%Y-%m-%d')}")
             
-            # Ensure KMonth data is loaded
-            if not self.k_month_data:
-                self.load_k_month_data()
+            self._load_k_month_data()
             
-            # Run DCA forecast using utility function
-            forecast_points = run_dca_forecast(
-                start_date=start_date,
-                end_date=end_date,
+            # Create forecast config
+            config = ForecastConfig(
                 qi_oil=self.qi_oil,
                 di_oil=self.dio,
                 b_oil=self.b_oil,
                 qi_liq=self.qi_liq,
                 di_liq=self.dil,
                 b_liq=self.b_liq,
-                k_month_data=self.k_month_data,
-                use_exponential=self.use_exponential_dca
+                start_date=start_date,
+                end_date=end_date,
+                use_exponential=self.use_exponential_dca,
+                k_month_data=self.k_month_data
             )
             
-            if not forecast_points:
-                return rx.toast.error("No forecast points generated. Check date range.")
+            # Run forecast using service
+            result = DCAService.run_production_forecast(config)
+            
+            if not result.is_success:
+                return rx.toast.error(result.error or "Forecast failed")
             
             # Save to database
-            version = self._save_forecast_to_production_table(self.selected_unique_id, forecast_points)
+            with rx.session() as session:
+                version = DCAService.get_next_version_fifo(
+                    session, ProductionForecast, self.selected_unique_id,
+                    MAX_PRODUCTION_FORECAST_VERSIONS, min_version=1
+                )
+                DCAService.save_forecast(
+                    session, ProductionForecast, self.selected_unique_id,
+                    result.forecast_points, version
+                )
+                
+                # Save to InterventionForecast if intervention planned
+                if self.has_planned_intervention:
+                    DCAService.save_forecast(
+                        session, InterventionForecast, self.selected_unique_id,
+                        result.forecast_points, version=0, data_type="Forecast"
+                    )
             
-            # Save to InterventionProd if planned intervention exists
-            if self.has_planned_intervention:
-                self._save_to_intervention_prod(self.selected_unique_id, forecast_points)
-            
-            # Update state with forecast data
-            self.forecast_data = [
-                {
-                    "date": fp.date.strftime("%Y-%m-%d"),
-                    "oilRate": fp.oil_rate,
-                    "liqRate": fp.liq_rate,
-                    "qOil": fp.q_oil,
-                    "qLiq": fp.q_liq,
-                    "wc": fp.wc
-                }
-                for fp in forecast_points
-            ]
+            # Update state
+            self.forecast_data = DCAService.forecast_to_dict_list(result.forecast_points)
             self.current_forecast_version = version
             
-            # Reload available versions
             with rx.session() as session:
-                forecast_versions = list(session.exec(
-                    select(ProductionForecast.Version).where(
-                        ProductionForecast.UniqueId == self.selected_unique_id
-                    ).distinct()
-                ).all())
-                self.available_forecast_versions = sorted(forecast_versions)
+                self.available_forecast_versions = DatabaseService.get_available_versions(
+                    session, ProductionForecast, self.selected_unique_id, min_version=1
+                )
             
             self._update_chart_data()
             
-            # Calculate totals for message
-            total_qoil = sum(fp.q_oil for fp in forecast_points)
-            total_qliq = sum(fp.q_liq for fp in forecast_points)
-            
-            msg = f"Forecast v{version} saved: {len(forecast_points)} months, Qoil={total_qoil:.0f}t, Qliq={total_qliq:.0f}t"
+            msg = f"Forecast v{version} saved: {result.months} months, Qoil={result.total_qoil:.0f}t"
             if self.has_planned_intervention:
                 msg += " (+ InterventionForecast v0)"
             
@@ -688,12 +390,9 @@ class ProductionState(rx.State):
                 )
                 session.commit()
                 
-                forecast_versions = list(session.exec(
-                    select(ProductionForecast.Version).where(
-                        ProductionForecast.UniqueId == self.selected_unique_id
-                    ).distinct()
-                ).all())
-                self.available_forecast_versions = sorted(forecast_versions)
+                self.available_forecast_versions = DatabaseService.get_available_versions(
+                    session, ProductionForecast, self.selected_unique_id, min_version=1
+                )
             
             if self.available_forecast_versions:
                 self.current_forecast_version = max(self.available_forecast_versions)
@@ -710,129 +409,16 @@ class ProductionState(rx.State):
             return rx.toast.error(f"Failed to delete: {str(e)}")
 
     def delete_current_forecast_version(self):
+        """Delete the currently selected forecast version."""
         return self.delete_forecast_version(self.current_forecast_version)
 
-    # ========== Batch Forecast Methods ==========
-    
     def cancel_batch_forecast(self):
         """Cancel the running batch forecast."""
         self.batch_forecast_cancelled = True
         return rx.toast.warning("Batch forecast cancellation requested...")
-    
-    def _run_single_forecast_vectorized(
-        self,
-        unique_id: str,
-        qi_oil: float,
-        qi_liq: float,
-        di_oil: float,
-        di_liq: float,
-        start_date: datetime,
-        end_date: datetime,
-        k_month_data: dict,
-        use_exponential: bool = True
-    ) -> Tuple[List[ForecastPoint], str]:
-        """Run forecast for a single completion using vectorized operations.
-        
-        Returns:
-            Tuple of (forecast_points, error_message)
-            If successful, error_message is empty string
-        """
-        try:
-            # Validate inputs
-            if qi_oil <= 0 and qi_liq <= 0:
-                return [], "No production data"
-            
-            if di_oil <= 0:
-                return [], "Invalid Di (oil)"
-            
-            if end_date <= start_date:
-                return [], "Invalid date range"
-            
-            # Run DCA forecast
-            forecast_points = run_dca_forecast(
-                start_date=start_date,
-                end_date=end_date,
-                qi_oil=qi_oil,
-                di_oil=di_oil,
-                b_oil=0.0,  # Exponential
-                qi_liq=qi_liq,
-                di_liq=di_liq if di_liq > 0 else di_oil,
-                b_liq=0.0,
-                k_month_data=k_month_data,
-                use_exponential=use_exponential
-            )
-            
-            return forecast_points, ""
-            
-        except Exception as e:
-            return [], str(e)
-    
-    def _save_batch_forecast(
-        self,
-        session,
-        unique_id: str,
-        forecast_points: List[ForecastPoint],
-        created_at: datetime
-    ) -> int:
-        """Save forecast to database within an existing session.
-        
-        Returns:
-            Version number saved
-        """
-        # Get next version using FIFO
-        existing_versions = session.exec(
-            select(ProductionForecast.Version, func.min(ProductionForecast.CreatedAt))
-            .where(ProductionForecast.UniqueId == unique_id)
-            .group_by(ProductionForecast.Version)
-        ).all()
-        
-        if not existing_versions:
-            version = 1
-        else:
-            used_versions = [v[0] for v in existing_versions]
-            
-            if len(used_versions) < MAX_PRODUCTION_FORECAST_VERSIONS:
-                for v in range(1, MAX_PRODUCTION_FORECAST_VERSIONS + 1):
-                    if v not in used_versions:
-                        version = v
-                        break
-            else:
-                oldest_version = min(existing_versions, key=lambda x: x[1])[0]
-                session.exec(
-                    delete(ProductionForecast).where(
-                        ProductionForecast.UniqueId == unique_id,
-                        ProductionForecast.Version == oldest_version
-                    )
-                )
-                version = oldest_version
-        
-        # Save forecast points
-        for fp in forecast_points:
-            prod_record = ProductionForecast(
-                UniqueId=unique_id,
-                Date=fp.date,
-                Version=version,
-                OilRate=fp.oil_rate,
-                LiqRate=fp.liq_rate,
-                Qoil=fp.q_oil,
-                Qliq=fp.q_liq,
-                WC=fp.wc,
-                CreatedAt=created_at
-            )
-            session.add(prod_record)
-        
-        return version
 
-    #@rx.event(background=True)
     def run_forecast_all(self):
-        """Run DCA forecast for all completions asynchronously.
-        
-        Uses vectorized numpy operations for efficiency.
-        Updates progress for UI feedback.
-        Handles errors gracefully without stopping entire batch.
-        """
-        # Initialize batch state
-        
+        """Run DCA forecast for all completions."""
         if not self.forecast_end_date:
             yield rx.toast.error("Please set forecast end date first")
             return
@@ -840,7 +426,7 @@ class ProductionState(rx.State):
         if not self._all_completions:
             yield rx.toast.error("No completions loaded")
             return
-            
+        
         self.is_batch_forecasting = True
         self.batch_forecast_cancelled = False
         self.batch_forecast_progress = 0
@@ -852,237 +438,126 @@ class ProductionState(rx.State):
         yield rx.toast.info(f"Starting batch forecast for {self.batch_forecast_total} completions...")
         
         try:
-            # Get configuration values from state
-            
-            end_date_str = self.forecast_end_date
-            k_month_data = self.k_month_data.copy()
-            use_exponential = self.use_exponential_dca
-            self.batch_forecast_total = len(self.completions)
-            completions = list(self.completions)
-            
-            end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
+            end_date = datetime.strptime(self.forecast_end_date, "%Y-%m-%d")
             five_years_ago = datetime.now() - timedelta(days=5*365)
             
-            # Ensure KMonth data is loaded
-            if not k_month_data:
-                with rx.session() as session:
-                    k_records = session.exec(select(KMonth)).all()
-                    k_month_data = {
-                        rec.MonthID: {
-                            "K_oil": rec.K_oil if rec.K_oil else 1.0,
-                            "K_liq": rec.K_liq if rec.K_liq else 1.0,
-                            "K_int": rec.K_int if rec.K_int else 1.0,
-                            "K_inj": rec.K_inj if rec.K_inj else 1.0
-                        }
-                        for rec in k_records
-                    }
-                
-                if not k_month_data:
-                    k_month_data = {
-                        i: {"K_oil": 1.0, "K_liq": 1.0, "K_int": 1.0, "K_inj": 1.0} 
-                        for i in range(1, 13)
-                    }
+            self._load_k_month_data()
             
-            # Pre-load all history data in batches for efficiency
-            
-            self.batch_forecast_current = "Loading production history..."
-            
-            history_by_completion: Dict[str, List[dict]] = {}
-            intervention_ids: set = set()
-            
+            # Bulk load history data
             with rx.session() as session:
-                # Load all history records in one query
-                all_history = session.exec(
-                    select(HistoryProd).where(
-                        HistoryProd.Date >= five_years_ago
-                    ).order_by(desc(HistoryProd.Date))
-                ).all()
+                history_by_completion = DatabaseService.bulk_load_history(
+                    session, HistoryProd, cutoff_date=five_years_ago
+                )
                 
-                # Group by UniqueId
-                for rec in all_history:
-                    uid = rec.UniqueId
-                    if uid not in history_by_completion:
-                        history_by_completion[uid] = []
-                    
-                    oil_rate = rec.OilRate if rec.OilRate else 0.0
-                    liq_rate = rec.LiqRate if rec.LiqRate else 0.0
-                    
-                    history_by_completion[uid].append({
-                        "Date": rec.Date,
-                        "OilRate": oil_rate,
-                        "LiqRate": liq_rate
-                    })
-                
-                # Load intervention IDs with planned status
+                # Get interventions
                 planned_interventions = session.exec(
-                    select(Intervention.UniqueId).where(
-                        Intervention.Status == "Plan"
-                    )
+                    select(Intervention.UniqueId).where(Intervention.Status == "Plan")
                 ).all()
                 intervention_ids = set(planned_interventions)
             
-            # Process completions in batches
-            batch_size = 10  # Process 10 completions per batch for DB efficiency
             success_count = 0
             error_count = 0
-            skip_count = 0
             total_qoil = 0.0
             total_qliq = 0.0
             
-            results = []
-            errors = []
-            
-            for i, completion in enumerate(completions):
-                # Check for cancellation
-                
+            for i, completion in enumerate(self.completions):
                 if self.batch_forecast_cancelled:
                     break
+                
                 self.batch_forecast_progress = i + 1
                 self.batch_forecast_current = f"Processing: {completion.UniqueId}"
                 
                 unique_id = completion.UniqueId
-                
-                # Get history data
                 history = history_by_completion.get(unique_id, [])
                 
                 if not history:
-                    skip_count += 1
-                    errors.append(f"{unique_id}: No history data")
+                    self.batch_forecast_errors.append(f"{unique_id}: No history data")
+                    error_count += 1
                     continue
                 
-                # Sort and get last record
                 sorted_history = sorted(history, key=lambda x: x["Date"])
                 last_prod = sorted_history[-1]
                 
-                qi_oil = last_prod["OilRate"]
-                qi_liq = last_prod["LiqRate"]
-                
-                if isinstance(last_prod["Date"], datetime):
-                    start_date = last_prod["Date"]
-                else:
-                    start_date = datetime.strptime(str(last_prod["Date"]), "%Y-%m-%d")
-                
-                # Get decline parameters
                 di_oil = completion.Do if completion.Do and completion.Do > 0 else 0.0
-                di_liq = completion.Dl if completion.Dl and completion.Dl > 0 else di_oil
                 
-                # Run vectorized forecast
-                forecast_points, error_msg = self._run_single_forecast_vectorized(
-                    unique_id=unique_id,
-                    qi_oil=qi_oil,
-                    qi_liq=qi_liq,
+                if di_oil <= 0:
+                    self.batch_forecast_errors.append(f"{unique_id}: Invalid Di")
+                    error_count += 1
+                    continue
+                
+                start_date = last_prod["Date"]
+                if isinstance(start_date, str):
+                    start_date = datetime.strptime(start_date, "%Y-%m-%d")
+                
+                config = ForecastConfig(
+                    qi_oil=last_prod["OilRate"],
                     di_oil=di_oil,
-                    di_liq=di_liq,
+                    b_oil=0.0,
+                    qi_liq=last_prod["LiqRate"],
+                    di_liq=completion.Dl if completion.Dl and completion.Dl > 0 else di_oil,
+                    b_liq=0.0,
                     start_date=start_date,
                     end_date=end_date,
-                    k_month_data=k_month_data,
-                    use_exponential=use_exponential
+                    use_exponential=True,
+                    k_month_data=self.k_month_data
                 )
                 
-                if error_msg:
+                result = DCAService.run_production_forecast(config)
+                
+                if not result.is_success:
+                    self.batch_forecast_errors.append(f"{unique_id}: {result.error}")
                     error_count += 1
-                    errors.append(f"{unique_id}: {error_msg}")
                     continue
                 
-                if not forecast_points:
-                    skip_count += 1
-                    errors.append(f"{unique_id}: No forecast generated")
-                    continue
+                total_qoil += result.total_qoil
+                total_qliq += result.total_qliq
                 
-                # Calculate totals
-                fc_qoil = sum(fp.q_oil for fp in forecast_points)
-                fc_qliq = sum(fp.q_liq for fp in forecast_points)
-                total_qoil += fc_qoil
-                total_qliq += fc_qliq
-                
-                # Save to database
                 try:
-                    created_at = datetime.now()
                     with rx.session() as session:
-                        version = self._save_batch_forecast(
-                            session, unique_id, forecast_points, created_at
+                        version = DCAService.get_next_version_fifo(
+                            session, ProductionForecast, unique_id,
+                            MAX_PRODUCTION_FORECAST_VERSIONS, min_version=1
+                        )
+                        DCAService.save_forecast(
+                            session, ProductionForecast, unique_id,
+                            result.forecast_points, version
                         )
                         
-                        # Also save to InterventionForecast if has planned intervention
                         if unique_id in intervention_ids:
-                            # Delete existing v0
-                            session.exec(
-                                delete(InterventionForecast).where(
-                                    InterventionForecast.UniqueId == unique_id,
-                                    InterventionForecast.Version == 0
-                                )
+                            DCAService.save_forecast(
+                                session, InterventionForecast, unique_id,
+                                result.forecast_points, version=0, data_type="Forecast"
                             )
-                            
-                            # Save new v0
-                            for fp in forecast_points:
-                                int_record = InterventionForecast(
-                                    UniqueId=unique_id,
-                                    Date=fp.date,
-                                    Version=0,
-                                    DataType="Forecast",
-                                    OilRate=fp.oil_rate,
-                                    LiqRate=fp.liq_rate,
-                                    Qoil=fp.q_oil,
-                                    Qliq=fp.q_liq,
-                                    WC=fp.wc,
-                                    CreatedAt=created_at
-                                )
-                                session.add(int_record)
-                        
-                        session.commit()
                     
                     success_count += 1
-                    results.append({
+                    self.batch_forecast_results.append({
                         "UniqueId": unique_id,
                         "Version": version,
-                        "Months": len(forecast_points),
-                        "Qoil": round(fc_qoil, 0),
-                        "Qliq": round(fc_qliq, 0)
+                        "Months": result.months,
+                        "Qoil": round(result.total_qoil, 0),
+                        "Qliq": round(result.total_qliq, 0)
                     })
                     
                 except Exception as e:
+                    self.batch_forecast_errors.append(f"{unique_id}: Save error - {str(e)}")
                     error_count += 1
-                    errors.append(f"{unique_id}: Save error - {str(e)}")
-                
-                # Yield control periodically to prevent UI blocking
-                if (i + 1) % 5 == 0:
-                    
-                    self.batch_forecast_results = results.copy()
-                    self.batch_forecast_errors = errors.copy()
-            
-            # Finalize
             
             self.is_batch_forecasting = False
-            self.batch_forecast_results = results
-            self.batch_forecast_errors = errors
             self.batch_forecast_current = "Complete"
             
-            # Show summary
             if self.batch_forecast_cancelled:
                 yield rx.toast.warning(
-                    f"Batch forecast cancelled. Processed {success_count} of {len(completions)} completions."
+                    f"Batch forecast cancelled. Processed {success_count} of {len(self.completions)} completions."
                 )
             else:
                 yield rx.toast.success(
-                    f"Batch forecast complete: {success_count} success, {error_count} errors, {skip_count} skipped. "
-                    f"Total Qoil={total_qoil:.0f}t, Qliq={total_qliq:.0f}t"
+                    f"Batch complete: {success_count} success, {error_count} errors. "
+                    f"Total Qoil={total_qoil:.0f}t"
                 )
-            
-            # Reload data for currently selected completion
-            
-            if self.selected_unique_id:
-                    # Trigger reload
-                pass
             
         except Exception as e:
             print(f"Batch forecast error: {e}")
-            import traceback
-            traceback.print_exc()
-            
-            
             self.is_batch_forecasting = False
-            self.batch_forecast_current = f"Error: {str(e)}"
-            
             yield rx.toast.error(f"Batch forecast failed: {str(e)}")
 
     # ========== Computed Properties ==========
@@ -1092,65 +567,21 @@ class ProductionState(rx.State):
         return len(self.completions)
     
     @rx.var
-    def unique_reservoirs(self) -> list[str]:
+    def unique_reservoirs(self) -> List[str]:
         reservoirs = set(c.Reservoir for c in self._all_completions if c.Reservoir)
         return ["All Reservoirs"] + sorted(reservoirs)
-    
-    @rx.var
-    def history_record_count(self) -> int:
-        return len(self.history_prod)
-    
-    @rx.var
-    def date_range_display(self) -> str:
-        if not self.history_prod:
-            return "No data"
-        dates = [p["Date"] for p in self.history_prod]
-        min_date = min(dates)
-        max_date = max(dates)
-        min_str = min_date.strftime("%Y-%m-%d") if isinstance(min_date, datetime) else str(min_date)
-        max_str = max_date.strftime("%Y-%m-%d") if isinstance(max_date, datetime) else str(max_date)
-        return f"{min_str} to {max_str}"
     
     @rx.var
     def dca_parameters_display(self) -> str:
         return f"qi_o: {self.qi_oil:.1f} | qi_l: {self.qi_liq:.1f} | Dio: {self.dio:.4f} | Dil: {self.dil:.4f}"
     
     @rx.var
-    def production_table_data(self) -> list[dict]:
-        sorted_data = sorted(self.history_prod, key=lambda x: x["Date"], reverse=True)[:24]
-        return [
-            {
-                "Date": p["Date"].strftime("%Y-%m-%d") if isinstance(p["Date"], datetime) else str(p["Date"]),
-                "OilRate": f"{p['OilRate']:.1f}",
-                "LiqRate": f"{p['LiqRate']:.1f}",
-                "WC": f"{p['WC']:.1f}",
-                "WC_val": p['WC']
-            }
-            for p in sorted_data
-        ]
+    def production_table_data(self) -> List[dict]:
+        return self._format_history_for_table(24)
     
     @rx.var
-    def forecast_table_data(self) -> list[dict]:
-        return [
-            {
-                "Date": f["date"], 
-                "OilRate": f"{f['oilRate']:.1f}", 
-                "LiqRate": f"{f['liqRate']:.1f}", 
-                "WC": f"{f['wc']:.1f}",
-                "WC_val": f['wc'],
-                "Qoil": f"{f['qOil']:.0f}",
-                "Qliq": f"{f['qLiq']:.0f}"
-            }
-            for f in self.forecast_data
-        ]
-    
-    @rx.var
-    def forecast_version_options(self) -> list[str]:
-        return [f"v{v}" for v in self.available_forecast_versions]
-    
-    @rx.var
-    def current_version_display(self) -> str:
-        return f"v{self.current_forecast_version}" if self.current_forecast_version > 0 else ""
+    def forecast_table_data(self) -> List[dict]:
+        return self._format_forecast_for_table(24)
     
     @rx.var
     def version_count_display(self) -> str:
@@ -1169,64 +600,39 @@ class ProductionState(rx.State):
         return "-"
     
     @rx.var
-    def forecast_totals_display(self) -> str:
-        """Display total cumulative production from forecast."""
-        if not self.forecast_data:
-            return "No forecast"
-        total_qoil = sum(f["qOil"] for f in self.forecast_data)
-        total_qliq = sum(f["qLiq"] for f in self.forecast_data)
-        return f"Total: Qoil={total_qoil:.0f}t | Qliq={total_qliq:.0f}t"
-    
-    @rx.var
-    def k_month_loaded(self) -> bool:
-        """Check if KMonth data is loaded."""
-        return len(self.k_month_data) > 0
-    
-    # ========== Batch Forecast Computed Properties ==========
-    
-    @rx.var
     def batch_progress_percent(self) -> int:
-        """Batch forecast progress as percentage."""
         if self.batch_forecast_total == 0:
             return 0
         return int((self.batch_forecast_progress / self.batch_forecast_total) * 100)
     
     @rx.var
     def batch_progress_display(self) -> str:
-        """Display batch progress status."""
         return f"{self.batch_forecast_progress}/{self.batch_forecast_total}"
     
     @rx.var
     def batch_success_count(self) -> int:
-        """Count of successful forecasts in batch."""
         return len(self.batch_forecast_results)
     
     @rx.var
     def batch_error_count(self) -> int:
-        """Count of errors in batch."""
         return len(self.batch_forecast_errors)
     
     @rx.var
     def batch_total_qoil(self) -> float:
-        """Total cumulative oil from batch forecast."""
         return sum(r.get("Qoil", 0) for r in self.batch_forecast_results)
     
     @rx.var
     def batch_total_qliq(self) -> float:
-        """Total cumulative liquid from batch forecast."""
         return sum(r.get("Qliq", 0) for r in self.batch_forecast_results)
     
     @rx.var
     def batch_total_qoil_display(self) -> str:
-        """Display string for total Qoil."""
         return f"{int(self.batch_total_qoil)}"
     
     @rx.var
     def batch_total_qliq_display(self) -> str:
-        """Display string for total Qliq."""
         return f"{int(self.batch_total_qliq)}"
     
     @rx.var
-    def batch_errors_display(self) -> list[str]:
-        """Get first 10 errors for display."""
+    def batch_errors_display(self) -> List[str]:
         return self.batch_forecast_errors[:10]
