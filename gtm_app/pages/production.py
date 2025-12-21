@@ -1,4 +1,7 @@
-"""Production monitoring page with CompletionID data and DCA forecasting."""
+"""Production monitoring page with CompletionID data and DCA forecasting.
+
+Updated to include Dip/Dir columns and filter by reservoir.
+"""
 import reflex as rx
 from ..templates.template import template
 from ..states.production_state import ProductionState
@@ -7,6 +10,8 @@ from ..components.production_components import (
     completion_table,
     completion_stats_summary,
     selected_completion_info,
+    batch_update_dip_dialog,
+    batch_update_dir_dialog,
 )
 from ..components.production_tables import (
     forecast_controls,
@@ -17,15 +22,22 @@ from ..components.production_tables import (
 
 
 def completion_table_section() -> rx.Component:
-    """Left section: CompletionID table with controls."""
+    """Left section: CompletionID table with controls and batch update buttons."""
     return rx.card(
         rx.vstack(
             rx.hstack(
                 rx.heading("Completion ID", size="4"),
                 rx.spacer(),
-                completion_filter_controls(),
+                rx.hstack(
+                    batch_update_dip_dialog(),
+                    batch_update_dir_dialog(),
+                    completion_filter_controls(),
+                    spacing="2",
+                    wrap="wrap",
+                ),
                 width="100%",
                 align="center",
+                wrap="wrap",
             ),
             rx.divider(),
             completion_table(),
@@ -50,7 +62,7 @@ def forecast_section() -> rx.Component:
             ),
             rx.divider(),
             
-            # Selected completion info
+            # Selected completion info with Dip/Dir
             selected_completion_info(),
             
             # Two tables side by side
@@ -90,6 +102,7 @@ def forecast_section() -> rx.Component:
     )
 
 
+
 @template(
     route="/",
     title="Production | GTM Dashboard",
@@ -101,18 +114,20 @@ def production_page() -> rx.Component:
     
     Features:
     - Display CompletionID table with well completion information
+    - Dip (Platform adjustment) and Dir (Reservoir+Field adjustment) columns
+    - Filter by reservoir
     - Load HistoryProd data (last 5 years) for selected completion
-    - Run Exponential DCA forecast: q(t) = qi * exp(-Di * t)
+    - Run Exponential DCA forecast: q(t) = qi * exp(-Di_eff * t)
       - qi: Last rate from HistoryProd
-      - Di: Decline rate from CompletionID.Do/Dl
+      - Di_eff: Effective decline = Do * (1 + Dip) * (1 + Dir)
     - Uses KMonth table for uptime factors
     - Cumulative: Qoil = K_oil * days_in_month * OilRate
     - Save forecasts to ProductionForecast table (max 4 versions, FIFO)
-    - If UniqueId has planned intervention in InterventionID,
-      also save forecast to InterventionForecast as version 0
+    - Batch update Dip for all completions on a platform
+    - Batch update Dir for all completions in a reservoir+field
     
-    DCA Formula: q(t) = qi * exp(-Di * t)
-    Cumulative: Q = K * days_in_month * rate
+    DCA Formula: q(t) = qi * exp(-Di_eff * 12/365 * t)
+    Effective Decline: Di_eff = Do * (1 + Dip) * (1 + Dir)
     """
     return rx.vstack(
         # Page Header
