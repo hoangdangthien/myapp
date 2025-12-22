@@ -40,7 +40,7 @@ def gtm_type_chart() -> rx.Component:
     return rx.card(
         rx.vstack(
             rx.heading("Intervention Types", size="4"),
-            bar_chart_simple(fig=GTMState.gtm_type_plotly), # Pass the plotly var
+            bar_chart_simple(fig=GTMState.gtm_type_plotly),
             width="100%",
             align="start",
             spacing="2",
@@ -71,12 +71,92 @@ def production_rate_chart() -> rx.Component:
     )
     
     chart = dual_axis_line_chart(
-        fig=GTMState.plotly_dual_axis_chart # Inherited from SharedForecastState
+        fig=GTMState.plotly_dual_axis_chart
     )
     
-    return production_chart_card(
-        title="Production Rate vs Time",
-        chart_component=chart,
-        toggle_controls=toggle_controls,
-        show_legend=False # Plotly has its own legend now
+    # Custom card with base forecast status indicator
+    return rx.card(
+        rx.vstack(
+            rx.hstack(
+                rx.heading("Production Rate vs Time", size="4"),
+                rx.spacer(),
+                # Base forecast status badge
+                rx.cond(
+                    GTMState.has_base_forecast,
+                    rx.badge(
+                        rx.hstack(
+                            rx.icon("git-branch", size=12),
+                            rx.text("Base v0", size="1"),
+                            spacing="1",
+                        ),
+                        color_scheme="gray",
+                        size="1",
+                        variant="soft",
+                    ),
+                    rx.badge(
+                        rx.hstack(
+                            rx.icon("alert-circle", size=12),
+                            rx.text("No Base", size="1"),
+                            spacing="1",
+                        ),
+                        color_scheme="yellow",
+                        size="1",
+                        variant="soft",
+                    ),
+                ),
+                toggle_controls,
+                width="100%",
+                align="center",
+            ),
+            chart,
+            # Legend for line styles
+            rx.hstack(
+                rx.badge(
+                    rx.hstack(
+                        rx.box(width="16px", height="3px", bg="#10b981"),
+                        rx.text("Actual", size="1"),
+                        spacing="1",
+                    ),
+                    variant="soft",
+                    size="1",
+                ),
+                rx.badge(
+                    rx.hstack(
+                        rx.box(
+                            width="16px", 
+                            height="3px", 
+                            style={"border_top": "2px dashed #059669"}
+                        ),
+                        rx.text("Forecast", size="1"),
+                        spacing="1",
+                    ),
+                    variant="soft",
+                    size="1",
+                ),
+                rx.cond(
+                    GTMState.has_base_forecast,
+                    rx.badge(
+                        rx.hstack(
+                            rx.box(
+                                width="16px", 
+                                height="3px", 
+                                style={"border_top": "2px dotted #6ee7b7"}
+                            ),
+                            rx.text("Base (No GTM)", size="1"),
+                            spacing="1",
+                        ),
+                        variant="soft",
+                        size="1",
+                    ),
+                    rx.fragment(),
+                ),
+                spacing="2",
+                justify="center",
+            ),
+            width="100%",
+            align="center",
+            spacing="3",
+        ),
+        padding="1em",
+        width="100%",
     )

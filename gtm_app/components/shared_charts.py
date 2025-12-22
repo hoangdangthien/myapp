@@ -1,7 +1,7 @@
 """Shared chart components for Production and GTM pages.
 
 These components provide consistent chart styling and behavior
-across the application using Recharts.
+across the application using Plotly.
 """
 import reflex as rx
 from typing import List, Dict, Callable, Optional
@@ -54,6 +54,7 @@ def chart_toggle_controls(
         ),
     ]
     
+    # Add base forecast toggle if provided
     if show_base_forecast is not None and toggle_base_forecast is not None:
         controls.append(
             rx.checkbox(
@@ -65,6 +66,7 @@ def chart_toggle_controls(
         )
     
     return rx.hstack(*controls, spacing="3", align="center")
+
 
 def chart_legend() -> rx.Component:
     """Create a chart legend showing line styles.
@@ -102,10 +104,53 @@ def chart_legend() -> rx.Component:
                 rx.box(
                     width="12px",
                     height="3px",
-                    bg=rx.color("gray", 6),
-                    style={"border_top": "2px dashed"}
+                    style={"border_top": "2px dashed var(--gray-6)"}
                 ),
                 rx.text("Forecast", size="1"),
+                spacing="1",
+            ),
+            variant="soft",
+        ),
+        spacing="2",
+        justify="center",
+    )
+
+
+def chart_legend_with_base() -> rx.Component:
+    """Create a chart legend including base forecast line style.
+    
+    Returns:
+        Legend component with base forecast indicator
+    """
+    return rx.hstack(
+        rx.badge(
+            rx.hstack(
+                rx.box(width="12px", height="3px", bg="#10b981"),
+                rx.text("Actual", size="1"),
+                spacing="1",
+            ),
+            variant="soft",
+        ),
+        rx.badge(
+            rx.hstack(
+                rx.box(
+                    width="12px",
+                    height="3px",
+                    style={"border_top": "2px dashed #059669"}
+                ),
+                rx.text("Forecast", size="1"),
+                spacing="1",
+            ),
+            variant="soft",
+        ),
+        rx.badge(
+            rx.hstack(
+                rx.box(
+                    width="12px",
+                    height="3px",
+                    style={"border_top": "2px dotted #6ee7b7"}
+                ),
+                rx.text("Base (No GTM)", size="1"),
                 spacing="1",
             ),
             variant="soft",
@@ -159,9 +204,16 @@ def production_chart_card(
 
 
 def dual_axis_line_chart(
-    fig: rx.Var,  # Now accepts a Plotly figure variable
+    fig: rx.Var,
 ) -> rx.Component:
-    """Render a dual-axis production chart using Plotly."""
+    """Render a dual-axis production chart using Plotly.
+    
+    Args:
+        fig: Plotly figure variable from state
+        
+    Returns:
+        Plotly chart component
+    """
     return rx.plotly(
         data=fig,
         width="100%",
@@ -169,10 +221,18 @@ def dual_axis_line_chart(
         height="400px"
     )
 
+
 def bar_chart_simple(
-    fig: rx.Var,  # Now accepts a Plotly figure variable
+    fig: rx.Var,
 ) -> rx.Component:
-    """Render a simple bar chart using Plotly."""
+    """Render a simple bar chart using Plotly.
+    
+    Args:
+        fig: Plotly figure variable from state
+        
+    Returns:
+        Plotly chart component
+    """
     return rx.plotly(
         data=fig,
         width="100%",
