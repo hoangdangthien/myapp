@@ -10,11 +10,12 @@ Base Forecast (Version 0): Production decline WITHOUT intervention
 """
 import reflex as rx
 from collections import Counter
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 from datetime import datetime, timedelta
 import pandas as pd
 import io
 from sqlmodel import select, delete, func, or_
+import plotly.graph_objects as go
 
 from ..models import (
     Intervention,
@@ -25,6 +26,17 @@ from ..models import (
 from ..services.dca_service import DCAService, ForecastConfig, ForecastResult
 from ..services.database_service import DatabaseService
 from .shared_state import SharedForecastState
+
+
+# Validation ranges for numeric fields
+VALIDATION_RULES = {
+    "InitialORate": {"min": 0, "max": 10000, "name": "Initial Oil Rate", "unit": "t/day"},
+    "InitialLRate": {"min": 0, "max": 20000, "name": "Initial Liquid Rate", "unit": "t/day"},
+    "bo": {"min": 0, "max": 2, "name": "b (oil)", "unit": ""},
+    "bl": {"min": 0, "max": 2, "name": "b (liquid)", "unit": ""},
+    "Dio": {"min": 0, "max": 1, "name": "Di (oil)", "unit": "1/year"},
+    "Dil": {"min": 0, "max": 1, "name": "Di (liquid)", "unit": "1/year"},
+}
 
 
 class GTMState(SharedForecastState):
@@ -69,6 +81,68 @@ class GTMState(SharedForecastState):
     next_year_summary: List[dict] = []
     current_year: int = datetime.now().year
     next_year: int = datetime.now().year + 1
+
+    @staticmethod
+    def _validate_numeric_ranges(form_data: dict) -> Tuple[bool, str]:
+        """Validate numeric fields are within allowed ranges.
+        
+        Args:
+            form_data: Form data dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        errors = []
+        
+        for field, rules in VALIDATION_RULES.items():
+            value = form_data.get(field)
+            if value is not None and str(value).strip() != "":
+                try:
+                    num_value = float(value)
+                    min_val = rules["min"]
+                    max_val = rules["max"]
+                    
+                    if num_value < min_val:
+                        errors.append(f"{rules['name']}: must be ≥ {min_val} (got {num_value})")
+                    elif num_value > max_val:
+                        errors.append(f"{rules['name']}: must be ≤ {max_val} (got {num_value})")
+                except (ValueError, TypeError):
+                    errors.append(f"{rules['name']}: invalid number '{value}'")
+        
+        if errors:
+            return False, "; ".join(errors[:3])  # Return first 3 errors
+        return True, ""
+
+    @staticmethod
+    def _validate_excel_row(row: pd.Series, row_index: int) -> Tuple[bool, str]:
+        """Validate a row from Excel upload.
+        
+        Args:
+            row: Pandas Series representing a row
+            row_index: Row number for error messages
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        errors = []
+        
+        for field, rules in VALIDATION_RULES.items():
+            if field in row:
+                value = row[field]
+                if pd.notna(value):
+                    try:
+                        num_value = float(value)
+                        min_val = rules["min"]
+                        max_val = rules["max"]
+                        
+                        if num_value < min_val or num_value > max_val:
+                            errors.append(f"Row {row_index}: {field}={num_value} out of range [{min_val}, {max_val}]")
+                    except (ValueError, TypeError):
+                        errors.append(f"Row {row_index}: {field} invalid number")
+        
+        if errors:
+            return False, "; ".join(errors)
+        return True, ""
 
     def toggle_base_forecast(self, checked: bool):
         """Toggle base forecast visibility on chart."""
@@ -134,7 +208,7 @@ class GTMState(SharedForecastState):
                 (g for g in self.GTM if g.UniqueId == self.selected_id), None
             )
             if selected_gtm:
-                self.intervention_date = selected_gtm.PlanningDate
+                self.intervention_date = selected_gtm.PlanningDate.split(" ")[0] 
                 self.current_gtm = selected_gtm
             
             self.load_base_forecast_from_db()
@@ -587,7 +661,7 @@ class GTMState(SharedForecastState):
             return rx.toast.error(f"Failed to download Excel: {str(e)}")
 
     async def handle_excel_upload(self, files: List[rx.UploadFile]):
-        """Handle Excel file upload for interventions."""
+        """Handle Excel file upload for interventions with validation."""
         if not files:
             return rx.toast.error("No file selected")
         
@@ -606,7 +680,22 @@ class GTMState(SharedForecastState):
             if missing_cols:
                 return rx.toast.error(f"Missing columns: {', '.join(missing_cols)}")
             
+            # Validate all rows first
+            validation_errors = []
+            for idx, row in df.iterrows():
+                is_valid, error_msg = self._validate_excel_row(row, idx + 2)  # +2 for Excel row number
+                if not is_valid:
+                    validation_errors.append(error_msg)
+            
+            if validation_errors:
+                error_summary = "; ".join(validation_errors[:5])  # Show first 5 errors
+                if len(validation_errors) > 5:
+                    error_summary += f" ... and {len(validation_errors) - 5} more errors"
+                return rx.toast.error(f"Validation failed: {error_summary}")
+            
             added_count = 0
+            skipped_count = 0
+            
             with rx.session() as session:
                 for _, row in df.iterrows():
                     existing = session.exec(
@@ -633,23 +722,35 @@ class GTMState(SharedForecastState):
                         )
                         session.add(new_gtm)
                         added_count += 1
+                    else:
+                        skipped_count += 1
                 
                 session.commit()
             
             self.load_gtms()
-            return rx.toast.success(f"Added {added_count} interventions from Excel")
+            
+            msg = f"Added {added_count} interventions from Excel"
+            if skipped_count > 0:
+                msg += f" ({skipped_count} duplicates skipped)"
+            
+            return rx.toast.success(msg)
             
         except Exception as e:
             return rx.toast.error(f"Failed to load Excel: {str(e)}")
 
     def add_gtm(self, form_data: dict):
-        """Add new GTM to database."""
+        """Add new GTM to database with validation."""
         try:
             if not form_data.get("UniqueId"):
                 return rx.toast.error("UniqueId is required!")
             
             if not form_data.get("PlanningDate"):
                 return rx.toast.error("Planning Date is required!")
+            
+            # Server-side validation of numeric ranges
+            is_valid, error_msg = self._validate_numeric_ranges(form_data)
+            if not is_valid:
+                return rx.toast.error(f"Validation failed: {error_msg}")
             
             # Parse numeric fields
             for field in ["InitialORate", "bo", "Dio", "InitialLRate", "bl", "Dil"]:
@@ -683,12 +784,17 @@ class GTMState(SharedForecastState):
         self.current_gtm = gtm
 
     def update_gtm(self, form_data: dict):
-        """Update existing GTM in database."""
+        """Update existing GTM in database with validation."""
         try:
             if not self.current_gtm:
                 return rx.toast.error("No intervention selected for update")
             
             unique_id = self.current_gtm.UniqueId
+            
+            # Server-side validation of numeric ranges
+            is_valid, error_msg = self._validate_numeric_ranges(form_data)
+            if not is_valid:
+                return rx.toast.error(f"Validation failed: {error_msg}")
             
             with rx.session() as session:
                 gtm_to_update = session.exec(
@@ -724,7 +830,7 @@ class GTMState(SharedForecastState):
             self.load_gtms()
             
             if self.selected_id == unique_id:
-                self.intervention_date = self.current_gtm.PlanningDate
+                self.intervention_date = self.current_gtm.PlanningDate.split(" ")[0] 
             
             return rx.toast.success(f"Intervention '{unique_id}' updated successfully!")
             
@@ -828,3 +934,30 @@ class GTMState(SharedForecastState):
     @rx.var
     def next_year_count(self) -> int:
         return len(self.next_year_summary)
+    @rx.var
+    def gtm_type_plotly(self) -> go.Figure:
+        """Generate a Plotly bar chart for GTM types."""
+        if not self.gtms_for_graph:
+            return go.Figure()
+            
+        names = [d["name"] for d in self.gtms_for_graph]
+        values = [d["value"] for d in self.gtms_for_graph]
+        
+        fig = go.Figure(data=[
+            go.Bar(
+                x=names, y=values,
+                marker_color="#3b82f6",
+                text=values,
+                textposition='auto',
+            )
+        ])
+        
+        fig.update_layout(
+            height=250,
+            margin=dict(l=20, r=20, t=20, b=20),
+            xaxis=dict(tickangle=-45),
+            yaxis=dict(title="Count"),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        return fig

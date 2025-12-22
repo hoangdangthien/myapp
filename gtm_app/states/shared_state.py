@@ -2,9 +2,11 @@
 import reflex as rx
 from typing import Dict, List, Optional
 from datetime import datetime
+import plotly.graph_objects as go
 
 from ..services.dca_service import DCAService
 from ..services.database_service import DatabaseService
+
 
 
 class SharedForecastState(rx.State):
@@ -31,6 +33,7 @@ class SharedForecastState(rx.State):
     show_oil: bool = True
     show_liquid: bool = True
     show_wc: bool = True
+    show_base_forecast: bool = False
     
     # Common forecast parameters
     forecast_end_date: str = ""
@@ -54,6 +57,9 @@ class SharedForecastState(rx.State):
     def toggle_wc(self, checked: bool):
         """Toggle water cut visibility."""
         self.show_wc = checked
+        
+    def toggle_base_forecast(self,checked:bool):
+        self.show_base_forecast = checked
     
     def set_forecast_end_date(self, date: str):
         """Set the forecast end date."""
@@ -182,3 +188,96 @@ class SharedForecastState(rx.State):
     def is_k_month_loaded(self) -> bool:
         """Check if KMonth data is loaded."""
         return self.k_month_loaded and len(self.k_month_data) > 0
+    @rx.var
+    def plotly_dual_axis_chart(self) -> go.Figure:
+        """Generate a dual-axis Plotly figure from chart_data."""
+        if not self.chart_data:
+            return go.Figure()
+
+        fig = go.Figure()
+        
+        # Helper to extract data
+        dates = [d.get("date") for d in self.chart_data]
+        
+        # 1. Oil Rate Traces
+        if self.show_oil:
+            # Actual
+            fig.add_trace(go.Scatter(
+                x=dates, y=[d.get("oilRate") for d in self.chart_data],
+                name="Oil Rate (Actual)", mode="lines+markers",
+                line=dict(color="#10b981", width=2), connectgaps=True
+            ))
+            # Forecast
+            fig.add_trace(go.Scatter(
+                x=dates, y=[d.get("oilRateForecast") for d in self.chart_data],
+                name="Oil Forecast", mode="lines",
+                line=dict(color="#059669", width=2, dash="dash"), connectgaps=True
+            ))
+            if getattr(self,"show_base_forecast",None):
+                fig.add_trace(go.Scatter(
+                    x=dates, y=[d.get("oilRateBase") for d in self.chart_data],
+                    name="Base Oil (No GTM)", mode="lines",
+                    line=dict(color="#10b981", width=2, dash="dot"), connectgaps=True
+                ))
+
+        # 2. Liquid Rate Traces
+        if self.show_liquid:
+            fig.add_trace(go.Scatter(
+                x=dates, y=[d.get("liqRate") for d in self.chart_data],
+                name="Liq Rate (Actual)", mode="lines+markers",
+                line=dict(color="#3b82f6", width=2), connectgaps=True
+            ))
+            fig.add_trace(go.Scatter(
+                x=dates, y=[d.get("liqRateForecast") for d in self.chart_data],
+                name="Liq Forecast", mode="lines",
+                line=dict(color="#2563eb", width=2, dash="dash"), connectgaps=True
+            ))
+            
+
+        # 3. Water Cut Traces (Secondary Y-Axis)
+        if self.show_wc:
+            fig.add_trace(go.Scatter(
+                x=dates, y=[d.get("wc") for d in self.chart_data],
+                name="Water Cut", mode="lines+markers",
+                line=dict(color="#ef4444", width=2),
+                yaxis="y2", connectgaps=True
+            ))
+            fig.add_trace(go.Scatter(
+                x=dates, y=[d.get("wcForecast") for d in self.chart_data],
+                name="WC Forecast", mode="lines",
+                line=dict(color="#dc2626", width=2, dash="dash"),
+                yaxis="y2", connectgaps=True
+            ))
+        #show base
+        """  
+            fig.add_trace(go.Scatter(
+                    x=dates, y=[d.get("liqRateBase") for d in self.chart_data],
+                    name="Base Liq (No GTM)", mode="lines",
+                    line=dict(color="#2563eb", width=2, dash="dot"), connectgaps=True
+                ))
+            fig.add_trace(go.Scatter(
+                    x=dates, y=[d.get("wcBase") for d in self.chart_data],
+                    name="Base WC (No GTM)", mode="lines",
+                    line=dict(color="#e62222ea", width=2, dash="dot"), connectgaps=True
+                ))"""  
+            
+                
+
+        # 4. Intervention Vertical Line
+        int_date = getattr(self, "intervention_date", None)
+        if int_date:
+            fig.add_vline(x=int_date, line_width=2, line_dash="dash", line_color="#f59e0b", annotation_text="GTM")
+
+        # Layout Configuration
+        fig.update_layout(
+            xaxis=dict(title="Date", showgrid=True, gridcolor="rgba(0,0,0,0.1)"),
+            yaxis=dict(title="Rate (t/day)", side="left", showgrid=True, gridcolor="rgba(0,0,0,0.1)"),
+            yaxis2=dict(title="Water Cut (%)", side="right", overlaying="y", range=[0, 100], showgrid=False),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=10)),
+            hovermode="x unified",
+            margin=dict(l=50, r=50, t=30, b=50),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            height=400,
+        )
+        return fig
