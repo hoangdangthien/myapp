@@ -1,4 +1,4 @@
-"""Dialog components for GTM CRUD operations."""
+"""Dialog components for GTM CRUD operations with input validation."""
 import reflex as rx
 from ..models import (
     Intervention, 
@@ -9,7 +9,14 @@ from ..models import (
     STATUS_OPTIONS
 )
 from ..states.gtm_state import GTMState
-from .form_fields import form_field, select_field
+from .form_fields import (
+    form_field, 
+    select_field, 
+    validated_number_field,
+    rate_field,
+    decline_parameter_field,
+    VALIDATION_RANGES,
+)
 
 # Category options for GTM
 GTM_CATEGORY_OPTIONS = [
@@ -34,8 +41,25 @@ def search_gtm():
     )
 
 
+def validation_info_callout() -> rx.Component:
+    """Display validation rules for the form."""
+    return rx.callout(
+        rx.vstack(
+            rx.text("Input Validation Rules:", weight="bold", size="1"),
+            rx.text("• Rates: 0 - 10,000 (oil) / 20,000 (liquid) t/day", size="1"),
+            rx.text("• b parameter: 0 - 2 (0=exponential, 1=harmonic)", size="1"),
+            rx.text("• Di rate: 0 - 1 (1/month)", size="1"),
+            spacing="0",
+            align="start",
+        ),
+        icon="info",
+        color_scheme="blue",
+        size="1",
+    )
+
+
 def add_gtm_button() -> rx.Component:
-    """Button and dialog for adding a new GTM/Intervention."""
+    """Button and dialog for adding a new GTM/Intervention with validated inputs."""
     return rx.dialog.root(
         rx.dialog.trigger(
             rx.button(
@@ -46,11 +70,12 @@ def add_gtm_button() -> rx.Component:
         ),
         rx.dialog.content(
             rx.dialog.title("Add New Well Intervention"),
-            rx.dialog.description("Fill the form with intervention details"),
+            rx.dialog.description("Fill the form with intervention details. Fields marked with * are required."),
             rx.form(
                 rx.flex(
+                    # Basic Info Section
                     rx.grid(
-                        form_field("UniqueId", "Enter unique ID", "text", "UniqueId"),
+                        form_field("UniqueId *", "Enter unique ID", "text", "UniqueId"),
                         select_field("Field", FIELD_OPTIONS, "Field"),
                         select_field("Platform", PLATFORM_OPTIONS, "Platform"),
                         select_field("Reservoir", RESERVOIR_OPTIONS, "Reservoir"),
@@ -58,35 +83,112 @@ def add_gtm_button() -> rx.Component:
                         spacing="3",
                         width="100%",
                     ),
+                    
+                    # Type and Status Section
                     rx.grid(
                         select_field("Type GTM", GTM_TYPE_OPTIONS, "TypeGTM"),
                         select_field("Category", GTM_CATEGORY_OPTIONS, "Category"),
-                        form_field("Planning Date", "", "date", "PlanningDate"),
+                        form_field("Planning Date *", "", "date", "PlanningDate"),
                         select_field("Status", STATUS_OPTIONS, "Status"),
                         columns="2",
                         spacing="3",
                         width="100%",
                     ),
-                    rx.text("Decline Curve Parameters - Oil", size="2", weight="bold"),
+                    
+                    # Oil Decline Parameters with Validation
+                    rx.hstack(
+                        rx.text("Decline Curve Parameters - Oil", size="2", weight="bold"),
+                        rx.badge("Validated", color_scheme="green", size="1"),
+                        spacing="2",
+                        align="center",
+                    ),
                     rx.grid(
-                        form_field("Initial Oil Rate", "0", "number", "InitialORate"),
-                        form_field("b (oil)", "0", "number", "bo"),
-                        form_field("Di (oil)", "0", "number", "Dio"),
+                        validated_number_field(
+                            label="Initial Oil Rate",
+                            name="InitialORate",
+                            default_value="0",
+                            min_value=0,
+                            max_value=10000,
+                            step="0.1",
+                            helper_text="t/day",
+                        ),
+                        validated_number_field(
+                            label="b (oil)",
+                            name="bo",
+                            default_value="0",
+                            min_value=0,
+                            max_value=2,
+                            step="0.01",
+                            helper_text="Arps exponent",
+                        ),
+                        validated_number_field(
+                            label="Di (oil)",
+                            name="Dio",
+                            default_value="0",
+                            min_value=0,
+                            max_value=1,
+                            step="0.0001",
+                            helper_text="1/month",
+                        ),
                         columns="3",
                         spacing="2",
                         width="100%",
                     ),
-                    rx.text("Decline Curve Parameters - Liquid", size="2", weight="bold"),
+                    
+                    # Liquid Decline Parameters with Validation
+                    rx.hstack(
+                        rx.text("Decline Curve Parameters - Liquid", size="2", weight="bold"),
+                        rx.badge("Validated", color_scheme="green", size="1"),
+                        spacing="2",
+                        align="center",
+                    ),
                     rx.grid(
-                        form_field("Initial Liq Rate", "0", "number", "InitialLRate"),
-                        form_field("b (liquid)", "0", "number", "bl"),
-                        form_field("Di (liquid)", "0", "number", "Dil"),
+                        validated_number_field(
+                            label="Initial Liq Rate",
+                            name="InitialLRate",
+                            default_value="0",
+                            min_value=0,
+                            max_value=20000,
+                            step="0.1",
+                            helper_text="t/day",
+                        ),
+                        validated_number_field(
+                            label="b (liquid)",
+                            name="bl",
+                            default_value="0",
+                            min_value=0,
+                            max_value=2,
+                            step="0.01",
+                            helper_text="Arps exponent",
+                        ),
+                        validated_number_field(
+                            label="Di (liquid)",
+                            name="Dil",
+                            default_value="0",
+                            min_value=0,
+                            max_value=1,
+                            step="0.0001",
+                            helper_text="1/month",
+                        ),
                         columns="3",
                         spacing="2",
                         width="100%",
                     ),
+                    
+                    # Description
                     rx.text("Description", size="2", weight="bold"),
-                    form_field("Describe intervention", "Describe detail intervention activity", "text", "Describe",required=False),
+                    form_field(
+                        "Describe intervention", 
+                        "Describe detail intervention activity", 
+                        "text", 
+                        "Describe",
+                        required=False
+                    ),
+                    
+                    # Validation Info
+                    validation_info_callout(),
+                    
+                    # Action Buttons
                     rx.flex(
                         rx.dialog.close(
                             rx.button("Cancel", variant="soft", color_scheme="gray"),
@@ -103,7 +205,7 @@ def add_gtm_button() -> rx.Component:
                 on_submit=GTMState.add_gtm,
                 reset_on_submit=True,
             ),
-            max_width="650px",
+            max_width="700px",
         ),
     )
 
@@ -127,6 +229,20 @@ def load_excel_button() -> rx.Component:
                 "InitialORate, bo, Dio, InitialLRate, bl, Dil"
             ),
             rx.vstack(
+                rx.callout(
+                    rx.vstack(
+                        rx.text("Value Validation:", weight="bold", size="1"),
+                        rx.text("• InitialORate: 0 - 10,000 t/day", size="1"),
+                        rx.text("• InitialLRate: 0 - 20,000 t/day", size="1"),
+                        rx.text("• bo, bl: 0 - 2", size="1"),
+                        rx.text("• Dio, Dil: 0 - 1 (1/month)", size="1"),
+                        spacing="0",
+                        align="start",
+                    ),
+                    icon="alert-triangle",
+                    color_scheme="yellow",
+                    size="1",
+                ),
                 rx.upload(
                     rx.vstack(
                         rx.icon("upload", size=32, color=rx.color("gray", 9)),
@@ -165,7 +281,7 @@ def load_excel_button() -> rx.Component:
 
 
 def update_gtm_dialog(gtm: Intervention) -> rx.Component:
-    """Dialog for editing an existing GTM/Intervention."""
+    """Dialog for editing an existing GTM/Intervention with validated inputs."""
     return rx.dialog.root(
         rx.dialog.trigger(
             rx.button(
@@ -178,10 +294,18 @@ def update_gtm_dialog(gtm: Intervention) -> rx.Component:
         ),
         rx.dialog.content(
             rx.dialog.title("Edit Well Intervention"),
-            rx.dialog.description("Update the intervention details"),
+            rx.dialog.description("Update the intervention details. Values must be within allowed ranges."),
             rx.form(
                 rx.flex(
-                    rx.text(f"UniqueId: {gtm.UniqueId}", weight="bold", size="3"),
+                    # UniqueId Display (not editable)
+                    rx.hstack(
+                        rx.text("UniqueId:", weight="bold", size="2"),
+                        rx.badge(gtm.UniqueId, color_scheme="blue", size="2"),
+                        spacing="2",
+                        align="center",
+                    ),
+                    
+                    # Basic Info
                     rx.grid(
                         select_field("Field", FIELD_OPTIONS, "Field", gtm.Field),
                         select_field("Platform", PLATFORM_OPTIONS, "Platform", gtm.Platform),
@@ -190,6 +314,8 @@ def update_gtm_dialog(gtm: Intervention) -> rx.Component:
                         spacing="2",
                         width="100%",
                     ),
+                    
+                    # Type and Status
                     rx.grid(
                         select_field("Type GTM", GTM_TYPE_OPTIONS, "TypeGTM", gtm.TypeGTM),
                         select_field("Category", GTM_CATEGORY_OPTIONS, "Category", gtm.Category),
@@ -199,26 +325,97 @@ def update_gtm_dialog(gtm: Intervention) -> rx.Component:
                         spacing="2",
                         width="100%",
                     ),
-                    rx.text("Decline Parameters - Oil", size="2", weight="bold"),
+                    
+                    # Oil Decline Parameters with Validation
+                    rx.hstack(
+                        rx.text("Decline Parameters - Oil", size="2", weight="bold"),
+                        rx.badge("Range: see hints", color_scheme="gray", size="1"),
+                        spacing="2",
+                    ),
                     rx.grid(
-                        form_field("Initial Oil Rate", "", "number", "InitialORate", gtm.InitialORate.to(str)),
-                        form_field("b (oil)", "", "number", "bo", gtm.bo.to(str)),
-                        form_field("Di (oil)", "", "number", "Dio", gtm.Dio.to(str)),
+                        validated_number_field(
+                            label="Initial Oil Rate",
+                            name="InitialORate",
+                            default_value=gtm.InitialORate.to(str),
+                            min_value=0,
+                            max_value=10000,
+                            step="0.1",
+                            helper_text="t/day",
+                        ),
+                        validated_number_field(
+                            label="b (oil)",
+                            name="bo",
+                            default_value=gtm.bo.to(str),
+                            min_value=0,
+                            max_value=2,
+                            step="0.01",
+                            helper_text="0-2",
+                        ),
+                        validated_number_field(
+                            label="Di (oil)",
+                            name="Dio",
+                            default_value=gtm.Dio.to(str),
+                            min_value=0,
+                            max_value=1,
+                            step="0.0001",
+                            helper_text="1/month",
+                        ),
                         columns="3",
                         spacing="2",
                         width="100%",
                     ),
-                    rx.text("Decline Parameters - Liquid", size="2", weight="bold"),
+                    
+                    # Liquid Decline Parameters with Validation
+                    rx.hstack(
+                        rx.text("Decline Parameters - Liquid", size="2", weight="bold"),
+                        rx.badge("Range: see hints", color_scheme="gray", size="1"),
+                        spacing="2",
+                    ),
                     rx.grid(
-                        form_field("Initial Liq Rate", "0", "number", "InitialLRate", gtm.InitialLRate.to(str)),
-                        form_field("b (liquid)", "0", "number", "bl", gtm.bl.to(str)),
-                        form_field("Di (liquid)", "0", "number", "Dil", gtm.Dil.to(str)),
+                        validated_number_field(
+                            label="Initial Liq Rate",
+                            name="InitialLRate",
+                            default_value=gtm.InitialLRate.to(str),
+                            min_value=0,
+                            max_value=20000,
+                            step="0.1",
+                            helper_text="t/day",
+                        ),
+                        validated_number_field(
+                            label="b (liquid)",
+                            name="bl",
+                            default_value=gtm.bl.to(str),
+                            min_value=0,
+                            max_value=2,
+                            step="0.01",
+                            helper_text="0-2",
+                        ),
+                        validated_number_field(
+                            label="Di (liquid)",
+                            name="Dil",
+                            default_value=gtm.Dil.to(str),
+                            min_value=0,
+                            max_value=1,
+                            step="0.0001",
+                            helper_text="1/month",
+                        ),
                         columns="3",
                         spacing="2",
                         width="100%",
                     ),
+                    
+                    # Description
                     rx.text("Description", size="2", weight="bold"),
-                    form_field("Describe intervention", "Describe detail intervention activity", "text", "Describe", gtm.Describe.to(str),required=False),
+                    form_field(
+                        "Describe intervention", 
+                        "Describe detail intervention activity", 
+                        "text", 
+                        "Describe", 
+                        gtm.Describe.to(str),
+                        required=False
+                    ),
+                    
+                    # Action Buttons
                     rx.flex(
                         rx.dialog.close(
                             rx.button("Cancel", variant="soft", color_scheme="gray"),
@@ -235,7 +432,7 @@ def update_gtm_dialog(gtm: Intervention) -> rx.Component:
                 on_submit=GTMState.update_gtm,
                 reset_on_submit=False,
             ),
-            max_width="650px",
+            max_width="700px",
         ),
     )
 

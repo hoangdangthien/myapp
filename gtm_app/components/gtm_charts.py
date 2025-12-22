@@ -40,13 +40,7 @@ def gtm_type_chart() -> rx.Component:
     return rx.card(
         rx.vstack(
             rx.heading("Intervention Types", size="4"),
-            bar_chart_simple(
-                data=GTMState.gtms_for_graph,
-                data_key="value",
-                name_key="name",
-                height=200,
-                color_scheme="accent"
-            ),
+            bar_chart_simple(fig=GTMState.gtm_type_plotly), # Pass the plotly var
             width="100%",
             align="start",
             spacing="2",
@@ -77,19 +71,12 @@ def production_rate_chart() -> rx.Component:
     )
     
     chart = dual_axis_line_chart(
-        data=GTMState.chart_data,
-        show_oil=GTMState.show_oil,
-        show_liquid=GTMState.show_liquid,
-        show_wc=GTMState.show_wc,
-        height=400,
-        show_forecast=True,
-        show_base_forecast=GTMState.show_base_forecast,
-        intervention_date=GTMState.intervention_date,
+        fig=GTMState.plotly_dual_axis_chart # Inherited from SharedForecastState
     )
     
     return production_chart_card(
         title="Production Rate vs Time",
         chart_component=chart,
         toggle_controls=toggle_controls,
-        show_legend=True
+        show_legend=False # Plotly has its own legend now
     )

@@ -312,17 +312,13 @@ def production_rate_chart() -> rx.Component:
     )
     
     chart = dual_axis_line_chart(
-        data=ProductionState.chart_data,
-        show_oil=ProductionState.show_oil,
-        show_liquid=ProductionState.show_liquid,
-        show_wc=ProductionState.show_wc,
-        height=350,
-        show_forecast=True,
+        fig=ProductionState.plotly_dual_axis_chart
     )
     
     return production_chart_card(
-        title="Production Rate vs Time (Exponential DCA)",
+        title="Production Rate vs Time",
         chart_component=chart,
         toggle_controls=toggle_controls,
-        show_legend=True
+        show_legend=False  # Plotly handles its own legend
     )
+

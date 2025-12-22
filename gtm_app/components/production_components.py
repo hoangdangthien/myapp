@@ -87,7 +87,7 @@ def update_completion_dialog(completion: CompletionID) -> rx.Component:
                                 type="number",
                                 name="Do",
                                 default_value=completion.Do.to(str),
-                                step="0.0001",
+                                step="0.00000001",
                                 width="100%",
                             ),
                             rx.text(f"Current: {completion.Do}", size="1", color=rx.color("gray", 10)),
@@ -102,7 +102,7 @@ def update_completion_dialog(completion: CompletionID) -> rx.Component:
                                 type="number",
                                 name="Dl",
                                 default_value=completion.Dl.to(str),
-                                step="0.0001",
+                                step="0.000000001",
                                 width="100%",
                             ),
                             rx.text(f"Current: {completion.Dl}", size="1", color=rx.color("gray", 10)),
@@ -131,7 +131,7 @@ def update_completion_dialog(completion: CompletionID) -> rx.Component:
                                 type="number",
                                 name="Dip",
                                 default_value=completion.Dip.to(str),
-                                step="0.01",
+                                step="0.0001",
                                 width="100%",
                             ),
                             rx.text(f"Current: {completion.Dip}", size="1", color=rx.color("gray", 10)),
@@ -153,7 +153,7 @@ def update_completion_dialog(completion: CompletionID) -> rx.Component:
                                 type="number",
                                 name="Dir",
                                 default_value=completion.Dir.to(str),
-                                step="0.01",
+                                step="0.0001",
                                 width="100%",
                             ),
                             rx.text(f"Current: {completion.Dir}", size="1", color=rx.color("gray", 10)),
@@ -325,66 +325,21 @@ def completion_stats_summary() -> rx.Component:
     """Summary statistics cards for completions."""
     return rx.grid(
         rx.card(
-            rx.vstack(
-                rx.hstack(
-                    rx.icon("layers", size=18, color=rx.color("blue", 9)),
-                    rx.text("Total Completions", size="1", weight="bold"),
-                    spacing="2",
-                ),
-                rx.heading(ProductionState.total_completions, size="5"),
-                spacing="1",
-                align="start",
-            ),
-            padding="1em",
-        ),
+            
+            rx.hstack(
+                rx.icon("layers", size=18, color=rx.color("blue", 9)),
+                rx.text(f"Total Completions : {ProductionState.total_completions}", size="2", weight="bold"),
+                spacing="2",
+                )),
         rx.card(
-            rx.vstack(
-                rx.hstack(
+            rx.hstack(
                     rx.icon("database", size=18, color=rx.color("green", 9)),
-                    rx.text("History Records", size="1", weight="bold"),
+                    rx.text(f"History Records: {ProductionState.history_record_count}", size="2", weight="bold"),
                     spacing="2",
                 ),
-                rx.heading(ProductionState.history_record_count, size="5"),
-                spacing="1",
-                align="start",
-            ),
             padding="1em",
         ),
-        rx.card(
-            rx.vstack(
-                rx.hstack(
-                    rx.icon("filter", size=18, color=rx.color("purple", 9)),
-                    rx.text("Filtered Reservoir", size="1", weight="bold"),
-                    spacing="2",
-                ),
-                rx.text(
-                    rx.cond(
-                        ProductionState.selected_reservoir != "",
-                        ProductionState.selected_reservoir,
-                        "All Reservoirs"
-                    ),
-                    size="2",
-                    weight="medium"
-                ),
-                spacing="1",
-                align="start",
-            ),
-            padding="1em",
-        ),
-        rx.card(
-            rx.vstack(
-                rx.hstack(
-                    rx.icon("calendar", size=18, color=rx.color("orange", 9)),
-                    rx.text("Date Range (5Y)", size="1", weight="bold"),
-                    spacing="2",
-                ),
-                rx.text(ProductionState.date_range_display, size="2"),
-                spacing="1",
-                align="start",
-            ),
-            padding="1em",
-        ),
-        columns="4",
+        columns="2",
         spacing="3",
         width="100%",
     )
