@@ -463,53 +463,133 @@ class DCAService:
         forecast_data: List[Dict],
         base_forecast_data: List[Dict] = None
     ) -> List[Dict]:
-        """Build unified chart data combining actual, forecast, and base forecast."""
-        chart_points = []
+        """Build unified chart data combining actual, forecast, and base forecast.
         
+        Key improvements for continuous time series visualization:
+        1. Use a dictionary keyed by date to merge overlapping points
+        2. Add transition point: last actual values also appear as first forecast point
+        3. Ensure continuous lines between history and forecast
+        
+        Args:
+            history_prod: List of historical production records
+            forecast_data: List of forecast data points
+            base_forecast_data: Optional base case forecast for comparison
+            
+        Returns:
+            Sorted list of chart data points with merged values
+        """
+        # Use dict to merge points by date - prevents duplicate dates
+        chart_dict: Dict[str, Dict] = {}
+        
+        # Track last actual point for creating transition
+        last_actual_date = None
+        last_actual_oil = 0.0
+        last_actual_liq = 0.0
+        last_actual_wc = 0.0
+        
+        # Process history data first
         sorted_history = sorted(history_prod, key=lambda x: x["Date"])
         for prod in sorted_history:
             date_val = prod["Date"]
-            date_str = date_val.strftime("%Y-%m-%d") if isinstance(date_val, datetime) else str(date_val)
-            chart_points.append({
-                "date": date_str,
-                "oilRate": prod["OilRate"],
-                "liqRate": prod["LiqRate"],
-                "wc": prod["WC"],
-                "type": "actual"
-            })
+            # Normalize date string format
+            if isinstance(date_val, datetime):
+                date_str = date_val.strftime("%Y-%m-%d")
+            else:
+                # Handle string dates - ensure consistent format
+                try:
+                    parsed_date = datetime.strptime(str(date_val)[:10], "%Y-%m-%d")
+                    date_str = parsed_date.strftime("%Y-%m-%d")
+                except:
+                    date_str = str(date_val)[:10]
+            
+            oil_rate = float(prod["OilRate"]) if prod["OilRate"] else 0.0
+            liq_rate = float(prod["LiqRate"]) if prod["LiqRate"] else 0.0
+            wc = float(prod["WC"]) if prod["WC"] else 0.0
+            
+            # Initialize or update chart point
+            if date_str not in chart_dict:
+                chart_dict[date_str] = {"date": date_str}
+            
+            chart_dict[date_str]["oilRate"] = oil_rate
+            chart_dict[date_str]["liqRate"] = liq_rate
+            chart_dict[date_str]["wc"] = wc
+            chart_dict[date_str]["type"] = "actual"
+            
+            # Track last actual for transition point
+            last_actual_date = date_str
+            last_actual_oil = oil_rate
+            last_actual_liq = liq_rate
+            last_actual_wc = wc
         
-        for fc in forecast_data:
-            wc_forecast = calculate_water_cut(fc["oilRate"], fc["liqRate"])
-            chart_points.append({
-                "date": fc["date"],
-                "oilRateForecast": fc["oilRate"],
-                "liqRateForecast": fc["liqRate"],
-                "wcForecast": round(wc_forecast, 2),
-                "type": "forecast"
-            })
+        # Process forecast data
+        for i, fc in enumerate(forecast_data):
+            date_str = fc["date"]
+            # Normalize date string
+            if isinstance(date_str, datetime):
+                date_str = date_str.strftime("%Y-%m-%d")
+            else:
+                date_str = str(date_str)[:10]
+            
+            oil_rate = float(fc["oilRate"]) if fc["oilRate"] else 0.0
+            liq_rate = float(fc["liqRate"]) if fc["liqRate"] else 0.0
+            wc_forecast = float(fc.get("wc", 0)) if fc.get("wc") else calculate_water_cut(oil_rate, liq_rate)
+            
+            if date_str not in chart_dict:
+                chart_dict[date_str] = {"date": date_str}
+            
+            chart_dict[date_str]["oilRateForecast"] = oil_rate
+            chart_dict[date_str]["liqRateForecast"] = liq_rate
+            chart_dict[date_str]["wcForecast"] = round(wc_forecast, 2)
+            
+            # Mark point type
+            if chart_dict[date_str].get("type") == "actual":
+                chart_dict[date_str]["type"] = "transition"
+            else:
+                chart_dict[date_str]["type"] = "forecast"
         
+        # Create transition point: Add last actual values to forecast series
+        # This ensures the forecast line connects to the history line
+        if last_actual_date and forecast_data:
+            if last_actual_date in chart_dict:
+                point = chart_dict[last_actual_date]
+                # Only add if forecast values not already present at this date
+                if "oilRateForecast" not in point:
+                    point["oilRateForecast"] = last_actual_oil
+                    point["liqRateForecast"] = last_actual_liq
+                    point["wcForecast"] = last_actual_wc
+                    point["type"] = "transition"
+        
+        # Process base forecast data (for intervention comparison)
         if base_forecast_data:
+            # Add transition from last actual to base forecast
+            if last_actual_date:
+                if last_actual_date in chart_dict:
+                    point = chart_dict[last_actual_date]
+                    if "oilRateBase" not in point:
+                        point["oilRateBase"] = last_actual_oil
+                        point["liqRateBase"] = last_actual_liq
+                        point["wcBase"] = last_actual_wc
+            
             for bf in base_forecast_data:
-                wc_base = calculate_water_cut(bf["oilRate"], bf["liqRate"])
-                
-                existing_point = next(
-                    (p for p in chart_points if p["date"] == bf["date"]),
-                    None
-                )
-                
-                if existing_point:
-                    existing_point["oilRateBase"] = bf["oilRate"]
-                    existing_point["liqRateBase"] = bf["liqRate"]
-                    existing_point["wcBase"] = round(wc_base, 2)
+                date_str = bf["date"]
+                if isinstance(date_str, datetime):
+                    date_str = date_str.strftime("%Y-%m-%d")
                 else:
-                    chart_points.append({
-                        "date": bf["date"],
-                        "oilRateBase": bf["oilRate"],
-                        "liqRateBase": bf["liqRate"],
-                        "wcBase": round(wc_base, 2),
-                        "type": "base_forecast"
-                    })
+                    date_str = str(date_str)[:10]
+                
+                oil_rate = float(bf["oilRate"]) if bf["oilRate"] else 0.0
+                liq_rate = float(bf["liqRate"]) if bf["liqRate"] else 0.0
+                wc_base = float(bf.get("wc", 0)) if bf.get("wc") else calculate_water_cut(oil_rate, liq_rate)
+                
+                if date_str not in chart_dict:
+                    chart_dict[date_str] = {"date": date_str, "type": "base_forecast"}
+                
+                chart_dict[date_str]["oilRateBase"] = oil_rate
+                chart_dict[date_str]["liqRateBase"] = liq_rate
+                chart_dict[date_str]["wcBase"] = round(wc_base, 2)
         
+        # Convert to sorted list
+        chart_points = list(chart_dict.values())
         chart_points.sort(key=lambda x: x["date"])
         
         return chart_points
