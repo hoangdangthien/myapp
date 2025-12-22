@@ -59,7 +59,7 @@ class GTMState(SharedForecastState):
     # Base forecast data (version 0 - without intervention)
     base_forecast_data: List[dict] = []
     has_base_forecast: bool = False
-    show_base_forecast: bool = True
+    
     
     # Intervention date for vertical line
     intervention_date: str = ""
@@ -144,9 +144,7 @@ class GTMState(SharedForecastState):
             return False, "; ".join(errors)
         return True, ""
 
-    def toggle_base_forecast(self, checked: bool):
-        """Toggle base forecast visibility on chart."""
-        self.show_base_forecast = checked
+    
 
     def set_add_dialog_open(self, is_open: bool):
         self.add_dialog_open = is_open
