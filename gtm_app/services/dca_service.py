@@ -427,6 +427,9 @@ class DCAService:
         for rec in history_records:
             oil_rate = rec.OilRate if rec.OilRate else 0.0
             liq_rate = rec.LiqRate if rec.LiqRate else 0.0
+            oil_prod = rec.Qoil if rec.Qoil else 0.0
+            water_prod = rec.Qwater if rec.Qwater else 0.0
+            liq_prod = oil_prod + water_prod
             wc = calculate_water_cut(oil_rate, liq_rate)
             
             result.append({
@@ -434,6 +437,8 @@ class DCAService:
                 "Date": rec.Date,
                 "OilRate": oil_rate,
                 "LiqRate": liq_rate,
+                "Qoil": oil_prod,
+                "Qliq":liq_prod,
                 "WC": round(wc, 2),
                 "GOR": rec.GOR if rec.GOR else 0.0,
                 "Dayon": rec.Dayon if rec.Dayon else 0.0,
