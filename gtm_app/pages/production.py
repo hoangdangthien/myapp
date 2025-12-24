@@ -8,17 +8,16 @@ from ..states.production_state import ProductionState
 from ..components.production_components import (
     completion_filter_controls,
     completion_table,
-    completion_stats_summary,
-    selected_completion_info,
+    forecast_version_selector,
     batch_update_dip_dialog,
     batch_update_dir_dialog,
 )
 from ..components.production_tables import (
     forecast_controls,
-    production_history_table,
     forecast_result_table,
     production_rate_chart,
 )
+from ..components.tables import *
 
 
 def completion_table_section() -> rx.Component:
@@ -62,30 +61,34 @@ def forecast_section() -> rx.Component:
             ),
             rx.divider(),
             
-            # Selected completion info with Dip/Dir
-            selected_completion_info(),
-            
             # Two tables side by side
             rx.grid(
                 # Production History
                 rx.vstack(
                     rx.badge("Production History (Last 5 Years)", color_scheme="green", size="2"),
-                    production_history_table(),
+                    production_table(ProductionState.production_table_data),
                     width="100%",
                     spacing="2",
                 ),
                 # Forecast Results
                 rx.vstack(
+                    rx.hstack(
+                    forecast_version_selector(),
                     rx.cond(
                         ProductionState.current_forecast_version > 0,
-                        rx.badge(
-                            f"Forecast Results v{ProductionState.current_forecast_version}",
-                            color_scheme="blue",
-                            size="2"
+                        rx.button(
+                            rx.icon("trash-2", size=14),
+                            rx.text("Delete version", size="1"),
+                            color_scheme="red",
+                            size="1",
+                            on_click=ProductionState.delete_current_forecast_version,
+                            
+                            ),
+                        rx.fragment(),
                         ),
-                        rx.badge("No Forecast", color_scheme="gray", size="2"),
+                        align="center"
                     ),
-                    forecast_result_table(),
+                    production_table(ProductionState.forecast_table_data),
                     width="100%",
                     spacing="2",
                 ),
@@ -105,7 +108,7 @@ def forecast_section() -> rx.Component:
 
 @template(
     route="/",
-    title="Production | GTM Dashboard",
+    title="Production | Production Dashboard",
     description="Production monitoring and DCA forecasting",
     on_load=ProductionState.load_completions,
 )
@@ -133,17 +136,18 @@ def production_page() -> rx.Component:
         # Page Header
         rx.hstack(
             rx.vstack(
-                rx.heading("Production Monitoring", size="6"),
+                rx.heading("Production Management", size="6"),
                 spacing="1",
                 align="start",
             ),
             rx.spacer(),
             rx.hstack(
+                rx.badge(f"Total Completions: {ProductionState.total_completions}", color_scheme="blue",size="2"),
                 rx.button(
-                    rx.icon("refresh-cw", size=16),
-                    rx.text("Refresh", size="2"),
+                    rx.icon("refresh-cw", size=14),
+                    rx.text("Reload", size="2"),
                     on_click=ProductionState.load_completions,
-                    size="2",
+                    size="1",
                     variant="soft",
                 ),
                 spacing="2",
@@ -152,10 +156,6 @@ def production_page() -> rx.Component:
             align="center",
         ),
         rx.divider(),
-        
-        # Statistics Summary
-        completion_stats_summary(),
-        
         # Main content: Two columns
         rx.grid(
             # Left: CompletionID Table
