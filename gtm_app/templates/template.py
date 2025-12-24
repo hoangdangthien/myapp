@@ -29,7 +29,7 @@ def template(
     def decorator(page_fn: Callable[[], rx.Component]) -> rx.Component:
         @rx.page(
             route=route,
-            title=title or "GTM Dashboard",
+            title=title or "Production Dashboard",
             description=description or "Well Intervention Management System",
             on_load=on_load,
         )
