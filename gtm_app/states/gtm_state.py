@@ -18,7 +18,7 @@ from sqlmodel import select, delete, func, or_
 import plotly.graph_objects as go
 
 from ..models import (
-    Intervention,
+    InterventionID,
     InterventionForecast,
     HistoryProd,
     MAX_FORECAST_VERSIONS
@@ -34,8 +34,8 @@ VALIDATION_RULES = {
     "InitialLRate": {"min": 0, "max": 20000, "name": "Initial Liquid Rate", "unit": "t/day"},
     "bo": {"min": 0, "max": 2, "name": "b (oil)", "unit": ""},
     "bl": {"min": 0, "max": 2, "name": "b (liquid)", "unit": ""},
-    "Dio": {"min": 0, "max": 1, "name": "Di (oil)", "unit": "1/year"},
-    "Dil": {"min": 0, "max": 1, "name": "Di (liquid)", "unit": "1/year"},
+    "Dio": {"min": 0, "max": 1, "name": "Di (oil)", "unit": "1/month"},
+    "Dil": {"min": 0, "max": 1, "name": "Di (liquid)", "unit": "1/month"},
 }
 
 
@@ -44,25 +44,20 @@ class GTMState(SharedForecastState):
     
     Inherits common functionality from SharedForecastState.
     """
-    
     # List of all interventions
-    GTM: List[Intervention] = []
+    GTM: List[InterventionID] = []
     
     # Data for graph visualization
     gtms_for_graph: List[dict] = []
     
     # Currently selected intervention
-    current_gtm: Optional[Intervention] = None
+    current_gtm: Optional[InterventionID] = None
     selected_id: str = ""
     available_ids: List[str] = []
     
     # Base forecast data (version 0 - without intervention)
     base_forecast_data: List[dict] = []
     has_base_forecast: bool = False
-    
-    
-    # Intervention date for vertical line
-    intervention_date: str = ""
     
     # Search/filter state
     search_value: str = ""
@@ -148,21 +143,27 @@ class GTMState(SharedForecastState):
 
     def set_add_dialog_open(self, is_open: bool):
         self.add_dialog_open = is_open
-
-    def load_gtms(self):
+    def transform_data(self):
+        """Transform GTM type data for visualization."""
+        type_counts = Counter(gtm.TypeGTM for gtm in self.GTM)
+        self.gtms_for_graph = [
+            {"name": gtm_group, "value": count}
+            for gtm_group, count in type_counts.items()
+        ]
+    def load_interventions(self):
         """Load all GTMs from database."""
         try:
             self._load_k_month_data()
             
             with rx.session() as session:
-                query = select(Intervention)
+                query = select(InterventionID)
                 if self.search_value:
                     search_value = f"%{str(self.search_value).lower()}%"
                     query = query.where(
                         or_(
-                            Intervention.UniqueId.ilike(search_value),
-                            Intervention.Field.ilike(search_value),
-                            Intervention.Platform.ilike(search_value)
+                            InterventionID.UniqueId.ilike(search_value),
+                            InterventionID.Field.ilike(search_value),
+                            InterventionID.Platform.ilike(search_value)
                         )
                     )
                 self.GTM = session.exec(query).all()
@@ -279,7 +280,7 @@ class GTMState(SharedForecastState):
     def filter_intervention(self, search_value):
         """Filter interventions by search value."""
         self.search_value = search_value
-        self.load_gtms()
+        self.load_interventions()
 
     def set_selected_id(self, id_value: str):
         """Set selected intervention ID."""
@@ -500,7 +501,7 @@ class GTMState(SharedForecastState):
             self.next_year = next_year
             
             with rx.session() as session:
-                interventions = session.exec(select(Intervention)).all()
+                interventions = session.exec(select(InterventionID)).all()
                 
                 intervention_dict = {
                     gtm.UniqueId: {
@@ -540,7 +541,8 @@ class GTMState(SharedForecastState):
                     latest_version = max(versions.keys())
                     records = versions[latest_version]
                     details = intervention_dict[uid]
-                    
+                    details["GTMYear"] = datetime.strptime(details["Date"],"%Y-%m-%d").year
+
                     current_year_monthly = {m: 0.0 for m in range(1, 13)}
                     next_year_monthly = {m: 0.0 for m in range(1, 13)}
                     
@@ -567,6 +569,7 @@ class GTMState(SharedForecastState):
                         "Category": details["Category"],
                         "Status": details["Status"],
                         "Date": details["Date"],
+                        "GTMYear": details["GTMYear"],
                     }
                     
                     current_year_row = base_row.copy()
@@ -576,8 +579,8 @@ class GTMState(SharedForecastState):
                         current_year_row[name] = round(current_year_monthly[i], 1)
                         next_year_row[name] = round(next_year_monthly[i], 1)
                     
-                    current_year_row["Total"] = round(sum(current_year_monthly.values()), 1)
-                    next_year_row["Total"] = round(sum(next_year_monthly.values()), 1)
+                    current_year_row["Total"] = round(sum(current_year_monthly.values())/1000, 1)
+                    next_year_row["Total"] = round(sum(next_year_monthly.values())/1000, 1)
                     
                     if sum(current_year_monthly.values()) > 0:
                         current_year_data.append(current_year_row)
@@ -697,11 +700,11 @@ class GTMState(SharedForecastState):
             with rx.session() as session:
                 for _, row in df.iterrows():
                     existing = session.exec(
-                        select(Intervention).where(Intervention.UniqueId == str(row['UniqueId']))
+                        select(InterventionID).where(InterventionID.UniqueId == str(row['UniqueId']))
                     ).first()
                     
                     if not existing:
-                        new_gtm = Intervention(
+                        new_gtm = InterventionID(
                             UniqueId=str(row['UniqueId']),
                             Field=str(row['Field']),
                             Platform=str(row['Platform']),
@@ -725,7 +728,7 @@ class GTMState(SharedForecastState):
                 
                 session.commit()
             
-            self.load_gtms()
+            self.load_interventions()
             
             msg = f"Added {added_count} interventions from Excel"
             if skipped_count > 0:
@@ -761,23 +764,23 @@ class GTMState(SharedForecastState):
             
             with rx.session() as session:
                 existing = session.exec(
-                    select(Intervention).where(Intervention.UniqueId == form_data["UniqueId"])
+                    select(InterventionID).where(InterventionID.UniqueId == form_data["UniqueId"])
                 ).first()
                 
                 if existing:
                     return rx.toast.error(f"UniqueId '{form_data['UniqueId']}' already exists!")
                 
-                new_gtm = Intervention(**form_data)
+                new_gtm = InterventionID(**form_data)
                 session.add(new_gtm)
                 session.commit()
             
-            self.load_gtms()
+            self.load_interventions()
             return rx.toast.success("GTM added successfully!")
             
         except Exception as e:
             return rx.toast.error(f"Failed to save GTM: {str(e)}")
 
-    def get_gtm(self, gtm: Intervention):
+    def get_gtm(self, gtm: InterventionID):
         """Set current GTM for editing."""
         self.current_gtm = gtm
 
@@ -796,7 +799,7 @@ class GTMState(SharedForecastState):
             
             with rx.session() as session:
                 gtm_to_update = session.exec(
-                    select(Intervention).where(Intervention.UniqueId == unique_id)
+                    select(InterventionID).where(InterventionID.UniqueId == unique_id)
                 ).first()
                 
                 if not gtm_to_update:
@@ -825,7 +828,7 @@ class GTMState(SharedForecastState):
                 session.refresh(gtm_to_update)
                 self.current_gtm = gtm_to_update
             
-            self.load_gtms()
+            self.load_interventions()
             
             if self.selected_id == unique_id:
                 self.intervention_date = self.current_gtm.PlanningDate.split(" ")[0] 
@@ -840,26 +843,20 @@ class GTMState(SharedForecastState):
         try:
             with rx.session() as session:
                 gtm_to_delete = session.exec(
-                    select(Intervention).where(Intervention.UniqueId == unique_id)
+                    select(InterventionID).where(InterventionID.UniqueId == unique_id)
                 ).first()
                 
                 if gtm_to_delete:
                     session.delete(gtm_to_delete)
                     session.commit()
             
-            self.load_gtms()
+            self.load_interventions()
             return rx.toast.success("GTM deleted successfully!")
             
         except Exception as e:
             return rx.toast.error(f"Failed to delete GTM: {str(e)}")
 
-    def transform_data(self):
-        """Transform GTM type data for visualization."""
-        type_counts = Counter(gtm.TypeGTM for gtm in self.GTM)
-        self.gtms_for_graph = [
-            {"name": gtm_group, "value": count}
-            for gtm_group, count in type_counts.items()
-        ]
+    
 
     # ========== Computed Properties ==========
     
@@ -875,13 +872,7 @@ class GTMState(SharedForecastState):
     def completed_interventions(self) -> int:
         return sum(1 for gtm in self.GTM if gtm.Status == "Done")
     
-    @rx.var
-    def production_table_data(self) -> List[dict]:
-        return self._format_history_for_table(24)
     
-    @rx.var
-    def forecast_table_data(self) -> List[dict]:
-        return self._format_forecast_for_table(12)
     
     @rx.var
     def base_forecast_table_data(self) -> List[dict]:

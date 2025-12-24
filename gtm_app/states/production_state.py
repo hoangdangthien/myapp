@@ -17,7 +17,7 @@ from ..models import (
     CompletionID,
     HistoryProd,
     ProductionForecast,
-    Intervention,
+    InterventionID,
     InterventionForecast,
     WellID,
     MAX_PRODUCTION_FORECAST_VERSIONS,
@@ -87,6 +87,7 @@ class ProductionState(SharedForecastState):
             
             if self.available_unique_ids and not self.selected_unique_id:
                 self.selected_unique_id = self.available_unique_ids[0]
+                #self.load_production_data_background()
                 
         except Exception as e:
             print(f"Error loading completions: {e}")
@@ -290,9 +291,9 @@ class ProductionState(SharedForecastState):
                 history_data = DCAService.load_history_data(session, unique_id, years=5)
                 
                 intervention = session.exec(
-                    select(Intervention).where(
-                        Intervention.UniqueId == unique_id,
-                        Intervention.Status == "Plan"
+                    select(InterventionID).where(
+                        InterventionID.UniqueId == unique_id,
+                        InterventionID.Status == "Plan"
                     )
                 ).first()
                 
@@ -533,7 +534,7 @@ class ProductionState(SharedForecastState):
                 )
                 
                 planned_interventions = session.exec(
-                    select(Intervention.UniqueId).where(Intervention.Status == "Plan")
+                    select(InterventionID.UniqueId).where(InterventionID.Status == "Plan")
                 ).all()
                 intervention_ids = set(planned_interventions)
             

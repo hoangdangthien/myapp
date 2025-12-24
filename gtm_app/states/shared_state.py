@@ -33,7 +33,9 @@ class SharedForecastState(rx.State):
     show_oil: bool = True
     show_liquid: bool = True
     show_wc: bool = True
-    show_base_forecast: bool = True  # Default to True so base forecast shows
+    show_base_forecast: bool = False  # Default to True so base forecast shows
+    #display intervention date
+    intervention_date: str = None
     
     # Common forecast parameters
     forecast_end_date: str = ""
@@ -116,6 +118,8 @@ class SharedForecastState(rx.State):
                 "Date": p["Date"].strftime("%Y-%m-%d") if isinstance(p["Date"], datetime) else str(p["Date"]),
                 "OilRate": f"{p['OilRate']:.1f}",
                 "LiqRate": f"{p['LiqRate']:.1f}",
+                "Qoil" : f"{p["Qoil"]:.1f}",
+                "Qliq" : f"{p["Qliq"]:.1f}",
                 "WC": f"{p['WC']:.1f}",
                 "WC_val": p['WC']
             }
@@ -171,8 +175,8 @@ class SharedForecastState(rx.State):
         """Display total cumulative production from forecast."""
         if not self.forecast_data:
             return "No forecast"
-        total_qoil = sum(f.get("qOil", 0) for f in self.forecast_data)
-        total_qliq = sum(f.get("qLiq", 0) for f in self.forecast_data)
+        total_qoil = round(sum(f.get("qOil", 0) for f in self.forecast_data)/1000,3)
+        total_qliq = round(sum(f.get("qLiq", 0) for f in self.forecast_data)/1000,3)
         return f"Total: Qoil={total_qoil:.0f}t | Qliq={total_qliq:.0f}t"
     
     @rx.var
@@ -189,7 +193,14 @@ class SharedForecastState(rx.State):
     def is_k_month_loaded(self) -> bool:
         """Check if KMonth data is loaded."""
         return self.k_month_loaded and len(self.k_month_data) > 0
-
+    @rx.var
+    def production_table_data(self) -> List[dict]:
+        return self._format_history_for_table(24)
+    
+    @rx.var
+    def forecast_table_data(self) -> List[dict]:
+        return self._format_forecast_for_table(12)
+    
     @rx.var
     def plotly_dual_axis_chart(self) -> go.Figure:
         """Generate a dual-axis Plotly figure from chart_data.
@@ -316,23 +327,26 @@ class SharedForecastState(rx.State):
                     ))
 
         # 4. Intervention Vertical Line (if intervention_date exists in subclass)
-        int_date = getattr(self, "intervention_date", None)
-        if int_date and int_date.strip():
+        #int_date = getattr(self, "intervention_date", None)
+        if self.intervention_date:
+            int_date = self.intervention_date
             fig.add_vline(
                 x=int_date, 
                 line_width=2, 
                 line_dash="dash", 
                 line_color="#f59e0b", 
-                annotation_text="GTM",
-                annotation_position="top"
             )
 
         # Layout Configuration
         fig.update_layout(
+
             xaxis=dict(
+                type="date",
                 title="Date", 
                 showgrid=True, 
-                gridcolor="rgba(0,0,0,0.1)"
+                gridcolor="rgba(0,0,0,0.1)",
+                unifiedhovertitle=dict(text="Date: %{x|%Y-%m-%d}"),
+                autorange=True
             ),
             yaxis=dict(
                 title="Rate (t/day)", 
@@ -344,21 +358,21 @@ class SharedForecastState(rx.State):
                 title="Water Cut (%)", 
                 side="right", 
                 overlaying="y", 
-                range=[0, 100], 
+                autorange=True, 
                 showgrid=False
             ),
             legend=dict(
                 orientation="h", 
-                yanchor="bottom", 
-                y=1.02, 
-                xanchor="right", 
-                x=1, 
+                yanchor="top", 
+                y=1.1, 
+                xanchor="left", 
+                x=0.3, 
                 font=dict(size=10)
             ),
             hovermode="x unified",
-            margin=dict(l=50, r=50, t=30, b=50),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=50, r=30, t=30, b=50),
+            paper_bgcolor="rgba(128, 128, 128, 0.1)",
+            plot_bgcolor="#f0f2f5",
             height=400,
         )
         return fig
