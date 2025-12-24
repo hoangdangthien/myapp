@@ -139,7 +139,7 @@ def validated_number_field(
     name: str,
     default_value: str = "0",
     required: bool = True,
-    step: str = "0.0001",
+    step: str = "0.0000001",
     min_value: Optional[float] = None,
     max_value: Optional[float] = None,
     placeholder: str = "",

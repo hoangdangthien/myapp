@@ -78,7 +78,7 @@ def update_completion_dialog(completion: CompletionID) -> rx.Component:
             ),
             rx.form(
                 rx.flex(
-                    rx.text("Base Decline Rates (1/year)", size="2", weight="bold", color=rx.color("gray", 11)),
+                    rx.text("Base Decline Rates (1/month)", size="2", weight="bold", color=rx.color("gray", 11)),
                     rx.grid(
                         rx.flex(
                             rx.text("Do (Oil Decline)", size="2", weight="bold"),
@@ -449,7 +449,7 @@ def forecast_version_selector() -> rx.Component:
     return rx.cond(
         ProductionState.available_forecast_versions.length() > 0,
         rx.hstack(
-            rx.text("Version:", size="1", weight="bold"),
+            rx.text("Forecast version:", size="1", weight="bold"),
             rx.select(
                 ProductionState.forecast_version_options,
                 value=ProductionState.current_version_display,

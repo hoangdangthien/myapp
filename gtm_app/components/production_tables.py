@@ -24,7 +24,7 @@ def forecast_controls() -> rx.Component:
     """Forecast control panel with UniqueId selector, date input, and run button."""
     return rx.hstack(
         rx.vstack(
-            rx.text("Unique ID:", size="1", weight="bold"),
+            rx.text("Select Completion:", size="1", weight="bold"),
             rx.select(
                 ProductionState.available_unique_ids,
                 value=ProductionState.selected_unique_id,
@@ -45,10 +45,10 @@ def forecast_controls() -> rx.Component:
             spacing="1",
         ),
         rx.button(
-            rx.icon("trending-up", size=16),
-            rx.text("Run DCA Forecast", size="2"),
+            rx.icon("play", size=16),
+            rx.text("Run Forecast", size="2"),
             on_click=ProductionState.run_forecast,
-            size="2",
+            size="1",
         ),
         run_all_forecast_button(),
         spacing="3",
@@ -61,11 +61,10 @@ def run_all_forecast_button() -> rx.Component:
     return rx.dialog.root(
         rx.dialog.trigger(
             rx.button(
-                rx.icon("layers", size=16),
-                rx.text("Run All", size="2"),
-                variant="soft",
-                color_scheme="blue",
-                size="2",
+                rx.icon("play", size=16),
+                rx.text("Run All Forecast", size="2"),
+                color_scheme="red",
+                size="1",
                 disabled=ProductionState.is_batch_forecasting,
             ),
         ),

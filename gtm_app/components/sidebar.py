@@ -36,7 +36,7 @@ def sidebar_header() -> rx.Component:
     return rx.hstack(
         rx.icon("droplet", size=28, color=rx.color("accent", 9)),
         rx.text(
-            "GTM Dashboard",
+            "Production Dashboard",
             size="5",
             weight="bold",
         ),
