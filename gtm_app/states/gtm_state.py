@@ -207,7 +207,7 @@ class GTMState(SharedForecastState):
                 (g for g in self.GTM if g.UniqueId == self.selected_id), None
             )
             if selected_gtm:
-                self.intervention_date = selected_gtm.PlanningDate.split(" ")[0] 
+                self.intervention_date = selected_gtm.PlanningDate 
                 self.current_gtm = selected_gtm
             
             self.load_base_forecast_from_db()
@@ -369,7 +369,7 @@ class GTMState(SharedForecastState):
             end_date = datetime.strptime(self.forecast_end_date, "%Y-%m-%d")
             
             if self.current_gtm.Status == "Plan":
-                start_date = datetime.strptime(self.current_gtm.PlanningDate, "%Y-%m-%d")
+                start_date = self.current_gtm.PlanningDate
             else:
                 if not self.history_prod:
                     return rx.toast.error("No production data available")
@@ -541,7 +541,7 @@ class GTMState(SharedForecastState):
                     latest_version = max(versions.keys())
                     records = versions[latest_version]
                     details = intervention_dict[uid]
-                    details["GTMYear"] = datetime.strptime(details["Date"],"%Y-%m-%d").year
+                    details["GTMYear"] = InterventionID.InterventionYear
 
                     current_year_monthly = {m: 0.0 for m in range(1, 13)}
                     next_year_monthly = {m: 0.0 for m in range(1, 13)}
@@ -762,14 +762,7 @@ class GTMState(SharedForecastState):
             form_data.setdefault("Category", "")
             form_data.setdefault("Describe", "")
             
-            with rx.session() as session:
-                existing = session.exec(
-                    select(InterventionID).where(InterventionID.UniqueId == form_data["UniqueId"])
-                ).first()
-                
-                if existing:
-                    return rx.toast.error(f"UniqueId '{form_data['UniqueId']}' already exists!")
-                
+            with rx.session() as session:              
                 new_gtm = InterventionID(**form_data)
                 session.add(new_gtm)
                 session.commit()
@@ -831,7 +824,7 @@ class GTMState(SharedForecastState):
             self.load_interventions()
             
             if self.selected_id == unique_id:
-                self.intervention_date = self.current_gtm.PlanningDate.split(" ")[0] 
+                self.intervention_date = self.current_gtm.PlanningDate
             
             return rx.toast.success(f"Intervention '{unique_id}' updated successfully!")
             

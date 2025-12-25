@@ -37,8 +37,8 @@ class ProductionState(SharedForecastState):
     _all_completions: List[CompletionID] = []
     
     selected_completion: Optional[CompletionID] = None
-    selected_unique_id: str = ""
-    available_unique_ids: List[str] = []
+    selected_id: str = ""
+    available_ids: List[str] = []
     current_completion: Optional[CompletionID] = None
     
     # DCA parameters from CompletionID
@@ -85,8 +85,8 @@ class ProductionState(SharedForecastState):
             
             self._apply_filters()
             
-            if self.available_unique_ids and not self.selected_unique_id:
-                self.selected_unique_id = self.available_unique_ids[0]
+            if self.available_ids and not self.selected_id:
+                self.selected_id = self.available_ids[0]
                 #self.load_production_data_background()
                 
         except Exception as e:
@@ -111,7 +111,7 @@ class ProductionState(SharedForecastState):
             filtered = [c for c in filtered if c.Reservoir == self.selected_reservoir]
         
         self.completions = filtered
-        self.available_unique_ids = [c.UniqueId for c in self.completions]
+        self.available_ids = [c.UniqueId for c in self.completions]
 
     def filter_completions(self, search_value: str):
         """Filter completions by search term."""
@@ -161,7 +161,7 @@ class ProductionState(SharedForecastState):
             self._all_completions = []
             self.load_completions()
             
-            if self.selected_unique_id == unique_id:
+            if self.selected_id == unique_id:
                 self.selected_completion = self.current_completion
                 self.dio = self.current_completion.Do if self.current_completion.Do else 0.0
                 self.dil = self.current_completion.Dl if self.current_completion.Dl else 0.0
@@ -244,12 +244,12 @@ class ProductionState(SharedForecastState):
         except Exception as e:
             return rx.toast.error(f"Batch update failed: {str(e)}")
 
-    def set_selected_unique_id(self, unique_id: str):
+    def set_selected_id(self, unique_id: str):
         """Set selected completion and trigger data load."""
-        if unique_id == self.selected_unique_id:
+        if unique_id == self.selected_id:
             return
             
-        self.selected_unique_id = unique_id
+        self.selected_id = unique_id
         self.forecast_data = []
         self.current_forecast_version = 0
         self.history_prod = []
@@ -277,7 +277,7 @@ class ProductionState(SharedForecastState):
         try:
             unique_id = None
             async with self:
-                unique_id = self.selected_unique_id
+                unique_id = self.selected_id
             
             if not unique_id:
                 return
@@ -338,14 +338,14 @@ class ProductionState(SharedForecastState):
 
     def _load_forecast_from_db(self):
         """Load forecast data for current version from database."""
-        if not self.selected_unique_id or self.current_forecast_version == 0:
+        if not self.selected_id or self.current_forecast_version == 0:
             self.forecast_data = []
             return
         
         try:
             with rx.session() as session:
                 self.forecast_data = DatabaseService.load_forecast_by_version(
-                    session, ProductionForecast, self.selected_unique_id, self.current_forecast_version
+                    session, ProductionForecast, self.selected_id, self.current_forecast_version
                 )
         except Exception as e:
             print(f"Error loading forecast: {e}")
@@ -419,18 +419,18 @@ class ProductionState(SharedForecastState):
             # Save to database
             with rx.session() as session:
                 version = DCAService.get_next_version_fifo(
-                    session, ProductionForecast, self.selected_unique_id,
+                    session, ProductionForecast, self.selected_id,
                     MAX_PRODUCTION_FORECAST_VERSIONS, min_version=1
                 )
                 DCAService.save_forecast(
-                    session, ProductionForecast, self.selected_unique_id,
+                    session, ProductionForecast, self.selected_id,
                     result.forecast_points, version
                 )
                 
                 # Save to InterventionForecast if intervention planned
                 if self.has_planned_intervention:
                     DCAService.save_forecast(
-                        session, InterventionForecast, self.selected_unique_id,
+                        session, InterventionForecast, self.selected_id,
                         result.forecast_points, version=0, data_type="Forecast"
                     )
             
@@ -440,7 +440,7 @@ class ProductionState(SharedForecastState):
             
             with rx.session() as session:
                 self.available_forecast_versions = DatabaseService.get_available_versions(
-                    session, ProductionForecast, self.selected_unique_id, min_version=1
+                    session, ProductionForecast, self.selected_id, min_version=1
                 )
             
             self._update_chart_data()
@@ -469,14 +469,14 @@ class ProductionState(SharedForecastState):
             with rx.session() as session:
                 session.exec(
                     delete(ProductionForecast).where(
-                        ProductionForecast.UniqueId == self.selected_unique_id,
+                        ProductionForecast.UniqueId == self.selected_id,
                         ProductionForecast.Version == version
                     )
                 )
                 session.commit()
                 
                 self.available_forecast_versions = DatabaseService.get_available_versions(
-                    session, ProductionForecast, self.selected_unique_id, min_version=1
+                    session, ProductionForecast, self.selected_id, min_version=1
                 )
             
             if self.available_forecast_versions:
