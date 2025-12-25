@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from datetime import datetime
 
 
-class Intervention(rx.Model, table=True):
+class InterventionID(rx.Model, table=True):
     """The intervention ID information - stores well intervention records."""
     __tablename__ = "InterventionID"
     ID: int = sqlmodel.Field(primary_key=True)
@@ -15,7 +15,8 @@ class Intervention(rx.Model, table=True):
     Reservoir: str
     TypeGTM: str
     Category: str        # using drilling platform, not using platform
-    PlanningDate: str
+    PlanningDate: datetime
+    InterventionYear: int
     Status: str
     InitialORate: float  # Initial Oil Rate (bbl/day)
     bo: float            # Arps decline parameter b for oil
@@ -200,8 +201,10 @@ GTM_TYPE_OPTIONS = [
 ]
 
 GTM_CATEGORY_OPTIONS = [
-    "Using drilling Platform",
-    "Not using drilling Platform"
+    "Using Drilling Platform",
+    "Not Using Platform",
+    "Exploration well",
+    "Other"
 ]
 
 # Status options
