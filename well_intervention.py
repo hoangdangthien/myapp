@@ -1,0 +1,337 @@
+"""Well Intervention (GTM) management page - With Summary Tables."""
+import reflex as rx
+from ..templates.template import template
+from ..states.gtm_state import GTMState
+from ..components.charts import *
+from ..components.tables import *
+from ..components.dialogs import *
+
+
+def intervention_table_section() -> rx.Component:
+    """Left section: Intervention ID table with controls."""
+    return rx.card(
+        rx.vstack(
+            # Header with buttons
+            rx.hstack(
+                rx.heading("Intervention ID", size="4"),
+                rx.spacer(),
+                rx.hstack(
+                    search_interventions(),
+                    add_intervention_button(),
+                    load_intervention_button(),
+                    spacing="2",
+                ),
+                width="100%",
+                align="center",
+            ),
+            rx.divider(),
+            # Table
+            intervention_table(),
+            width="100%",
+            spacing="3",
+        ),
+        padding="1em",
+        height="100%",
+    )
+
+
+def forecast_controls() -> rx.Component:
+    """Forecast control panel with date input, version selector, and buttons."""
+    return rx.hstack(
+        rx.vstack(
+            rx.text("Select Intervention:", size="1", weight="bold"),
+            rx.select(
+                GTMState.available_ids,
+                value=GTMState.selected_id,
+                on_change=GTMState.set_selected_id,
+                size="1",
+                width="150px",
+                ),
+            spacing="1",
+        ),
+        rx.vstack(
+            rx.text("Forecast End Date", size="1", weight="bold"),
+            rx.input(
+                type="date",
+                on_change=GTMState.set_forecast_end_date,
+                width="150px",
+                size="1",
+            ),
+            spacing="1",
+        ),
+        rx.button(
+            rx.icon("play", size=16),
+            rx.text("Run Forecast", size="2"),
+            on_click=GTMState.run_forecast,
+            size="1",
+        ),
+        rx.button(
+            rx.icon("play", size=16),
+            rx.text("Run All Forecast", size="2"),
+            on_click=None,
+            size="1",
+        ),
+        spacing="3",
+        align="end",
+    )
+
+"""rx.button(
+            rx.icon("git-branch", size=16),
+            rx.text("Gen Base", size="2"),
+            on_click=GTMState.generate_base_forecast,
+            size="1",
+            variant="soft",
+            color_scheme="gray",
+        ),"""
+def forecast_version_selector() -> rx.Component:
+    """Selector for viewing different forecast versions."""
+    return rx.cond(
+        GTMState.available_forecast_versions.length() > 0,
+        rx.hstack(
+            rx.text("Forecast Version:", size="1", weight="bold"),
+            rx.select(
+                GTMState.forecast_version_options,
+                value=f"v{GTMState.current_forecast_version}",
+                on_change=lambda v: GTMState.set_forecast_version_from_str,
+                size="1",
+                width="80px",
+            ),
+            spacing="1",
+            align="center",
+        ),
+        rx.text("No forecast versions available", size="1", color=rx.color("gray", 9)),
+    )
+
+
+def current_intervention_info() -> rx.Component:
+    """Display current selected intervention info."""
+    return rx.cond(
+        GTMState.current_gtm,
+        rx.vstack(
+            rx.hstack(
+                rx.divider(orientation="vertical", size="2"),
+                rx.vstack(
+                    rx.text("Type:", size="1", weight="bold"),
+                    rx.badge(
+                        rx.cond(
+                            GTMState.current_gtm,
+                            GTMState.current_gtm.TypeGTM,
+                            "-"
+                        ),
+                        color_scheme="blue",
+                        size="1"
+                    ),
+                    spacing="0",
+                ),
+                rx.divider(orientation="vertical", size="2"),
+                rx.vstack(
+                    rx.text("Date:", size="1", weight="bold",align="center"),
+                    rx.text(GTMState.intervention_date, size="1"),
+                    spacing="0",
+                ),
+                rx.divider(orientation="vertical", size="2"),
+                rx.badge(
+                rx.vstack(
+                    rx.text("qi_o / b_o / Di_o:", size="1", weight="bold",align="center"),
+                    rx.text(
+                        rx.cond(
+                            GTMState.current_gtm,
+                            f"{GTMState.current_gtm.InitialORate:.0f} / {GTMState.current_gtm.bo:.2f} / {GTMState.current_gtm.Dio:.3f}",
+                            "-"
+                        ),
+                        size="1"
+                    ),
+                    spacing="0",
+                ),
+                color_scheme="green",
+                ),
+                rx.divider(orientation="vertical", size="2"),
+                rx.cond(
+                    GTMState.current_forecast_version > 0,
+                    rx.button(
+                        rx.icon("trash-2", size=12),
+                        rx.text("Delete Version", size="1"),
+                        variant="ghost",
+                        color_scheme="red",
+                        size="1",
+                        on_click=lambda: GTMState.delete_current_forecast_version,
+                    ),
+                    rx.fragment(),
+                ),
+                spacing="9",
+                padding="0.5em",
+                background=rx.color("gray", 2),
+                border_radius="6px",
+                width="100%",
+            ),
+            spacing="2",
+            width="100%",
+        ),
+        rx.text("Select an intervention", color=rx.color("gray", 10), size="2"),
+    )
+
+
+def forecast_section() -> rx.Component:
+    """Right section: Forecast table and controls."""
+    return rx.card(
+        rx.vstack(
+            # Header with forecast controls
+            rx.hstack(
+                rx.heading("Production Forecast", size="4"),
+                rx.spacer(),
+                forecast_controls(),
+                width="100%",
+                align="center",
+            ),
+            rx.divider(),
+            # Two tables side by side
+            rx.grid(
+                # Production Records (from HistoryProd - last 5 years, showing last 24)
+                rx.vstack(
+                    rx.hstack(
+                        rx.badge("Production History Last 5 Years", color_scheme="green", size="2"),
+                        spacing="2",
+                        align="center",
+                    ),
+                    production_table(GTMState.production_table_data),
+                    width="100%",
+                    spacing="2",
+                ),
+                # Forecast Results
+                rx.vstack(
+                    rx.hstack(
+                        forecast_version_selector(),
+                        rx.cond(
+                            GTMState.has_base_forecast,
+                            rx.badge("Base v0", color_scheme="gray", size="2"),
+                            rx.badge("No base",color_scheme="yellow",size="2"),
+                        ),
+                        rx.cond(
+                            GTMState.current_forecast_version > 0,
+                            rx.button(
+                                rx.icon("trash-2", size=14),
+                                rx.text("Delete Version", size="1"),
+                                color_scheme="red",
+                                size="1",
+                                on_click=lambda: GTMState.delete_current_forecast_version,
+                            ),
+                            rx.fragment(),
+                        ),
+                        spacing="2",
+                        align="center",
+                    ),
+                    production_table(GTMState.forecast_table_data),
+                    width="100%",
+                    spacing="2",
+                ),
+                columns="2",
+                spacing="3",
+                width="100%",
+            ),
+            
+            width="100%",
+            spacing="3",
+        ),
+        padding="1em",
+        height="100%",
+    )
+
+
+def summary_section() -> rx.Component:
+    """Summary tables section showing Qoil forecast by month for current and next year."""
+    return rx.vstack(
+        rx.hstack(
+            rx.hstack(
+                rx.icon("table-2", size=20, color=rx.color("blue", 9)),
+                rx.heading("Intervention Qoil Forecast Summary", size="5"),
+                spacing="2",
+                align="center",
+            ),
+            rx.spacer(),
+            #download_all_button(),
+            width="100%",
+            align="center",
+        ),
+        rx.divider(),
+        rx.grid(
+            current_year_intervention_table(),
+            next_year_intervention_table(),
+            columns="1",
+            spacing="4",
+            width="100%",
+        ),
+        width="100%",
+        spacing="4",
+    )
+
+
+@template(
+    route="/well-intervention",
+    title="Well Intervention | Production Dashboard",
+    description="Manage well intervention activities",
+    on_load=GTMState.load_interventions,
+)
+def well_intervention_page() -> rx.Component:
+    """Well Intervention management page with Summary Tables.
+    
+    Layout:
+    - Top: Two-column grid (Left: Intervention Table | Right: Forecast/Production)
+    - Middle: Rate vs Time scatter plot with intervention line
+    - Bottom: Summary tables showing Qoil forecast by month for current and next year
+    
+    Features:
+    - Production data from HistoryProd table (last 5 years)
+    - Water Cut (WC) calculated as: WC = (Liqrate - Oilrate) / Liqrate * 100
+    - Forecast versioning: Saves up to 3 forecast versions per intervention (FIFO)
+    - Base forecast (v0): Production decline WITHOUT intervention for comparison
+    - Version selector: Switch between different forecast versions
+    - Auto-save: Forecasts automatically saved to InterventionForecast table
+    - Summary Tables: Qoil by month for current year and next year
+    - Excel Export: Download summary data as Excel files
+    
+    Summary Table Columns:
+    - UniqueId, Field, Platform, Reservoir, Type, Category, Status, Date
+    - Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec, Total
+    """
+    return rx.vstack(
+        # Page Header
+        rx.hstack(
+            rx.heading("Well Intervention Management", size="6"),
+            rx.spacer(),
+            rx.hstack(
+                rx.badge(f"Total: {GTMState.total_interventions}", color_scheme="blue"),
+                rx.badge(f"Planned: {GTMState.planned_interventions}", color_scheme="yellow"),
+                rx.badge(f"Completed: {GTMState.completed_interventions}", color_scheme="green"),
+                spacing="2",
+            ),
+            width="100%",
+            align="center",
+        ),
+        rx.divider(),
+        
+        # Main content: Two columns
+        rx.grid(
+            # Left: Intervention ID Table
+            intervention_table_section(),
+            # Right: Forecast Section
+            forecast_section(),
+            columns="2",
+            spacing="4",
+            width="100%",
+        ),
+        
+        # Production Rate Chart
+        rx.grid(
+            production_rate_chart(state=GTMState),
+            columns="2",
+            spacing="4",
+            width="100%"
+        ),
+
+        # Summary Tables Section
+        summary_section(),
+        
+        align="start",
+        spacing="4",
+        width="100%",
+    )
