@@ -5,29 +5,29 @@ from ..states.production_state import ProductionState
 from .dialogs import *
 
 #show intervention input table
-def show_intervention(Intv: InterventionID) -> rx.Component:
+def show_intervention(intervention: InterventionID) -> rx.Component:
     """Show an intervention in a table row with edit/delete buttons."""
     return rx.table.row(
-        rx.table.cell(rx.text(Intv.UniqueId, size="1", weight="medium")),
-        rx.table.cell(rx.text(Intv.Field, size="1")),
-        rx.table.cell(rx.text(Intv.Platform, size="1")),
-        rx.table.cell(rx.text(Intv.Reservoir, size="1")),
-        rx.table.cell(rx.badge(Intv.TypeGTM, color_scheme="blue", size="1")),
-        rx.table.cell(rx.text(Intv.PlanningDate, size="1")),
+        rx.table.cell(rx.text(intervention.UniqueId, size="1", weight="medium")),
+        rx.table.cell(rx.text(intervention.Field, size="1")),
+        rx.table.cell(rx.text(intervention.Platform, size="1")),
+        rx.table.cell(rx.text(intervention.Reservoir, size="1")),
+        rx.table.cell(rx.badge(intervention.TypeGTM, color_scheme="blue", size="1")),
+        rx.table.cell(rx.text(intervention.PlanningDate, size="1")),
         rx.table.cell(
             rx.badge(
-                Intv.Status,
-                color_scheme=rx.cond(Intv.Status == "Done", "green", rx.cond(Intv.Status == "Plan", "yellow", "gray")),
+                intervention.Status,
+                color_scheme=rx.cond(intervention.Status == "Done", "green", rx.cond(intervention.Status == "Plan", "yellow", "gray")),
                 size="1"
             )
         ),
-        rx.table.cell(rx.text(f"{Intv.InitialORate:.0f}", size="1")),
-        rx.table.cell(rx.text(f"{Intv.bo:.2f}", size="1")),
-        rx.table.cell(rx.text(f"{Intv.Dio:.3f}", size="1")),
-        rx.table.cell(rx.text(f"{Intv.InitialLRate:.0f}", size="1")),
-        rx.table.cell(rx.text(f"{Intv.bl:.2f}", size="1")),
-        rx.table.cell(rx.text(f"{Intv.Dil:.3f}", size="1")),
-        rx.table.cell(rx.hstack(update_intervention_dialog(Intv), delete_intervention_dialog(Intv), spacing="1")),
+        rx.table.cell(rx.text(f"{intervention.InitialORate:.0f}", size="1")),
+        rx.table.cell(rx.text(f"{intervention.bo:.2f}", size="1")),
+        rx.table.cell(rx.text(f"{intervention.Dio:.3f}", size="1")),
+        rx.table.cell(rx.text(f"{intervention.InitialLRate:.0f}", size="1")),
+        rx.table.cell(rx.text(f"{intervention.bl:.2f}", size="1")),
+        rx.table.cell(rx.text(f"{intervention.Dil:.3f}", size="1")),
+        rx.table.cell(rx.hstack(update_intervention_dialog(intervention), delete_intervention_dialog(intervention), spacing="1")),
         style={"_hover": {"bg": rx.color("gray", 3)}},
         align="center",
     )
@@ -170,10 +170,7 @@ def completion_table() -> rx.Component:
                 ),
             ),
             rx.table.body(
-                rx.foreach(
-                    ProductionState.completions,
-                    show_completion_row
-                ),
+                rx.foreach(ProductionState.completions,show_completion_row),
             ),
             variant="surface",
             size="1",

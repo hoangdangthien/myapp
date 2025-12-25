@@ -255,7 +255,7 @@ def show_completion_row(completion: CompletionID) -> rx.Component:
         ),
         style={"_hover": {"bg": rx.color("gray", 3)}, "cursor": "pointer"},
         align="center",
-        on_click=lambda: ProductionState.set_selected_unique_id(completion.UniqueId),
+        on_click=lambda: ProductionState.set_selected_id(completion.UniqueId),
     )
 
 

@@ -210,7 +210,7 @@ def update_intervention_dialog(Intv: InterventionID) -> rx.Component:
                     rx.grid(
                         select_field("Type GTM", GTM_TYPE_OPTIONS, "TypeGTM", Intv.TypeGTM),
                         select_field("Category", GTM_CATEGORY_OPTIONS, "Category", Intv.Category),
-                        form_field("Planning Date", "", "date", "PlanningDate", Intv.PlanningDate),
+                        form_field("Planning Date", "", "date", "PlanningDate", str(Intv.PlanningDate)),
                         select_field("Status", STATUS_OPTIONS, "Status", Intv.Status),
                         columns="2",
                         spacing="2",

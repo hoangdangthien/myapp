@@ -26,9 +26,9 @@ def forecast_controls() -> rx.Component:
         rx.vstack(
             rx.text("Select Completion:", size="1", weight="bold"),
             rx.select(
-                ProductionState.available_unique_ids,
-                value=ProductionState.selected_unique_id,
-                on_change=ProductionState.set_selected_unique_id,
+                ProductionState.available_ids,
+                value=ProductionState.selected_id,
+                on_change=ProductionState.set_selected_id,
                 size="1",
                 width="150px",
             ),
