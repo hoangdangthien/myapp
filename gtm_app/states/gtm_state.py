@@ -45,13 +45,12 @@ class GTMState(SharedForecastState):
     Inherits common functionality from SharedForecastState.
     """
     # List of all interventions
-    GTM: List[InterventionID] = []
+    interventions: List[InterventionID] = []
+    _all_interventions: List[InterventionID] = []
     
-    # Data for graph visualization
-    gtms_for_graph: List[dict] = []
-    
+
     # Currently selected intervention
-    current_gtm: Optional[InterventionID] = None
+    current_intervention: Optional[InterventionID] = None
     selected_id: str = ""
     available_ids: List[str] = []
     
@@ -67,9 +66,6 @@ class GTMState(SharedForecastState):
     # File upload state
     upload_progress: int = 0
     upload_status: str = ""
-    
-    # Dialog control
-    add_dialog_open: bool = False
     
     # ========== Summary Tables State ==========
     current_year_summary: List[dict] = []
@@ -140,38 +136,19 @@ class GTMState(SharedForecastState):
         return True, ""
 
     
-
-    def set_add_dialog_open(self, is_open: bool):
-        self.add_dialog_open = is_open
-    def transform_data(self):
-        """Transform GTM type data for visualization."""
-        type_counts = Counter(gtm.TypeGTM for gtm in self.GTM)
-        self.gtms_for_graph = [
-            {"name": gtm_group, "value": count}
-            for gtm_group, count in type_counts.items()
-        ]
+    
+    #loading landing page
     def load_interventions(self):
         """Load all GTMs from database."""
         try:
             self._load_k_month_data()
             
             with rx.session() as session:
-                query = select(InterventionID)
-                if self.search_value:
-                    search_value = f"%{str(self.search_value).lower()}%"
-                    query = query.where(
-                        or_(
-                            InterventionID.UniqueId.ilike(search_value),
-                            InterventionID.Field.ilike(search_value),
-                            InterventionID.Platform.ilike(search_value)
-                        )
-                    )
-                self.GTM = session.exec(query).all()
+                
+                self._all_interventions = session.exec(select(InterventionID)).all()
             
-            self.transform_data()
-            self.available_ids = [gtm.UniqueId for gtm in self.GTM]
-            
-            if self.available_ids and not self.selected_id:
+            self._apply_filters()
+            if self.available_ids:
                 self.selected_id = self.available_ids[0]
                 self.load_production_data()
             
@@ -179,10 +156,42 @@ class GTMState(SharedForecastState):
             
         except Exception as e:
             print(f"Error loading GTMs: {e}")
-            self.GTM = []
-
+            self.interventions = []
+    #logic for Intervention ID table
+    """
+    1. Search intervention
+    2. Add button using for adding one intervention
+    3. Load file using for adding list interventions from excels
+    4. Delete intervention button --> reload all intervention
+    5. Edit intervention button
+    """
+    #1. filter helping fucntion
+    def _apply_filters(self):
+        filtered = self._all_interventions
+        if self.search_value:
+            search_lower = self.search_value.lower()
+            filtered = [
+                i for i in filtered
+                if (i.UniqueId and search_lower in i.UniqueId.lower()) or
+                   (i.Platform and search_lower in i.Platform.lower()) or
+                   (i.Field and search_lower in i.Field.lower()) or 
+                   (i.Reservoir and search_lower in i.Reservoir.lower()) or
+                   (i.Status and search_lower in i.Status.lower())
+            ]
+        self.interventions = filtered
+        self.available_ids = [str(i.ID)+"_"+i.UniqueId for i in self.interventions]
+    #1. filter
+    def filter_interventions(self,search_values:str):
+        self.search_value = search_values
+        self._apply_filters()
+    #loading selected data
     def load_production_data(self):
-        """Load production data for selected intervention."""
+        """Load hsitory and forecast production data for selected intervention.
+        1. Load history data to list of record dict for display
+        2. Get available forecast (list version to select)
+        3. Check if has base forecast for this Id
+        4. Set current intervention using for forecast
+        5. Load history and available forecast for display in table and """
         if not self.selected_id:
             self.history_prod = []
             self.chart_data = []
@@ -192,23 +201,26 @@ class GTMState(SharedForecastState):
             
         try:
             with rx.session() as session:
-                self.history_prod = DCAService.load_history_data(session, self.selected_id, years=5)
+                self.history_prod = DCAService.load_history_data(session, self.selected_id.split("_")[1], years=5)
+
+                versions_list = session.exec(
+                            select(InterventionForecast.Version).where(
+                            InterventionForecast.ID == self.selected_id.split("_")[0],
+                            InterventionForecast.Version >= 1).distinct()).all()
                 
-                self.available_forecast_versions = DatabaseService.get_available_versions(
-                    session, InterventionForecast, self.selected_id, min_version=1
-                )
+                self.available_forecast_versions = sorted(versions_list)
                 
                 self.has_base_forecast = DatabaseService.check_record_exists(
                     session, InterventionForecast,
-                    {"UniqueId": self.selected_id, "Version": 0}
+                    {"ID": self.selected_id.split("_")[0], "Version": 0}
                 )
             
             selected_gtm = next(
-                (g for g in self.GTM if g.UniqueId == self.selected_id), None
+                (g for g in self.interventions if g.UniqueId == self.selected_id.split("_")[1]), None
             )
             if selected_gtm:
-                self.intervention_date = selected_gtm.PlanningDate 
-                self.current_gtm = selected_gtm
+                self.intervention_date = selected_gtm.PlanningDate.split(" ")[0] 
+                self.current_intervention = selected_gtm
             
             self.load_base_forecast_from_db()
             
@@ -234,7 +246,7 @@ class GTMState(SharedForecastState):
         try:
             with rx.session() as session:
                 self.base_forecast_data = DatabaseService.load_forecast_by_version(
-                    session, InterventionForecast, self.selected_id, version=0
+                    session, InterventionForecast, self.selected_id.split("_")[1], version=0
                 )
                 self.has_base_forecast = len(self.base_forecast_data) > 0
         except Exception as e:
@@ -251,7 +263,7 @@ class GTMState(SharedForecastState):
         try:
             with rx.session() as session:
                 self.forecast_data = DatabaseService.load_forecast_by_version(
-                    session, InterventionForecast, self.selected_id, self.current_forecast_version
+                    session, InterventionForecast, self.selected_id.split("_")[1], self.current_forecast_version
                 )
         except Exception as e:
             print(f"Error loading forecast: {e}")
@@ -265,22 +277,13 @@ class GTMState(SharedForecastState):
             base_forecast_data=self.base_forecast_data
         )
 
-    def set_forecast_version(self, version: int):
-        """Set and load a specific forecast version."""
-        self.current_forecast_version = version
-        self.load_forecast_from_db()
-        self._update_chart_with_base()
 
-    def set_forecast_version_from_str(self, version_str: str):
+    def set_forecast_version(self, version_str: str):
         """Set forecast version from string."""
         if version_str and version_str.startswith("v"):
-            version = int(version_str[1:])
-            self.set_forecast_version(version)
-
-    def filter_intervention(self, search_value):
-        """Filter interventions by search value."""
-        self.search_value = search_value
-        self.load_interventions()
+            self.current_forecast_version=int(version_str[1:])
+            self.load_forecast_from_db()
+            self._update_chart_with_base()
 
     def set_selected_id(self, id_value: str):
         """Set selected intervention ID."""
@@ -291,85 +294,24 @@ class GTMState(SharedForecastState):
         self.has_base_forecast = False
         self.load_production_data()
 
-    def generate_base_forecast(self):
-        """Generate base forecast (version 0) - production decline WITHOUT intervention."""
-        if not self.history_prod:
-            return rx.toast.error("No production history available")
-        
-        if not self.forecast_end_date:
-            return rx.toast.error("Please set forecast end date first")
-        
-        try:
-            sorted_prod = sorted(self.history_prod, key=lambda x: x["Date"])
-            last_prod = sorted_prod[-1]
-            
-            if isinstance(last_prod["Date"], datetime):
-                start_date = last_prod["Date"]
-            else:
-                start_date = datetime.strptime(str(last_prod["Date"]), "%Y-%m-%d")
-            
-            end_date = datetime.strptime(self.forecast_end_date, "%Y-%m-%d")
-            
-            if end_date <= start_date:
-                return rx.toast.error(f"End date must be after {start_date.strftime('%Y-%m-%d')}")
-            
-            # Use lower decline rate for base case
-            di_oil = self.current_gtm.Dio * 0.5 if self.current_gtm and self.current_gtm.Dio else 0.1
-            
-            config = ForecastConfig(
-                qi_oil=last_prod["OilRate"],
-                di_oil=di_oil,
-                b_oil=0.0,
-                qi_liq=last_prod["LiqRate"],
-                di_liq=di_oil,
-                b_liq=0.0,
-                start_date=start_date,
-                end_date=end_date,
-                use_exponential=True,
-                k_month_data=self.k_month_data
-            )
-            
-            result = DCAService.run_intervention_forecast(config)
-            
-            if not result.is_success:
-                return rx.toast.error(result.error or "Base forecast failed")
-            
-            # Save as version 0
-            with rx.session() as session:
-                DCAService.save_forecast(
-                    session, InterventionForecast, self.selected_id,
-                    result.forecast_points, version=0, data_type="Forecast"
-                )
-            
-            self.base_forecast_data = DCAService.forecast_to_dict_list(result.forecast_points)
-            self.has_base_forecast = True
-            self._update_chart_with_base()
-            
-            return rx.toast.success(
-                f"Base forecast (v0): {result.months} months, Qoil={result.total_qoil:.0f}t"
-            )
-            
-        except Exception as e:
-            print(f"Base forecast error: {e}")
-            return rx.toast.error(f"Base forecast failed: {str(e)}")
 
     def run_forecast(self):
         """Run Arps decline curve forecast for intervention."""
-        if not self.current_gtm or not self.forecast_end_date:
+        if not self.current_intervention or not self.forecast_end_date:
             return rx.toast.error("Please select an intervention and set forecast end date")
         
         try:
-            qi_oil = self.current_gtm.InitialORate
-            b_oil = self.current_gtm.bo
-            di_oil = self.current_gtm.Dio
-            qi_liq = self.current_gtm.InitialLRate
-            b_liq = self.current_gtm.bl
-            di_liq = self.current_gtm.Dil
+            qi_oil = self.current_intervention.InitialORate
+            b_oil = self.current_intervention.bo
+            di_oil = self.current_intervention.Dio
+            qi_liq = self.current_intervention.InitialLRate
+            b_liq = self.current_intervention.bl
+            di_liq = self.current_intervention.Dil
             
             end_date = datetime.strptime(self.forecast_end_date, "%Y-%m-%d")
             
-            if self.current_gtm.Status == "Plan":
-                start_date = self.current_gtm.PlanningDate
+            if self.current_intervention.Status == "Plan":
+                start_date = datetime.strptime(self.current_intervention.PlanningDate, "%Y-%m-%d")
             else:
                 if not self.history_prod:
                     return rx.toast.error("No production data available")
@@ -411,11 +353,11 @@ class GTMState(SharedForecastState):
             # Save forecast
             with rx.session() as session:
                 version = DCAService.get_next_version_fifo(
-                    session, InterventionForecast, self.selected_id,
+                    session, InterventionForecast, self.selected_id.split("_")[1],
                     MAX_FORECAST_VERSIONS, min_version=1
                 )
                 DCAService.save_forecast(
-                    session, InterventionForecast, self.selected_id,
+                    session, InterventionForecast, self.selected_id.split("_")[1],
                     result.forecast_points, version, data_type="Forecast"
                 )
             
@@ -424,11 +366,8 @@ class GTMState(SharedForecastState):
             
             with rx.session() as session:
                 self.available_forecast_versions = DatabaseService.get_available_versions(
-                    session, InterventionForecast, self.selected_id, min_version=1
+                    session, InterventionForecast, self.selected_id.split("_")[1], min_version=1
                 )
-            
-            if not self.has_base_forecast:
-                self.generate_base_forecast()
             
             self._update_chart_with_base()
             self.load_forecast_summary_tables()
@@ -444,8 +383,9 @@ class GTMState(SharedForecastState):
             traceback.print_exc()
             return rx.toast.error(f"Forecast failed: {str(e)}")
 
-    def delete_forecast_version(self, version: int):
+    def delete_forecast_version(self):
         """Delete a specific forecast version."""
+        version = self.current_forecast_version
         if version == 0:
             return rx.toast.error("Cannot delete base case forecast (version 0)")
         
@@ -453,7 +393,7 @@ class GTMState(SharedForecastState):
             with rx.session() as session:
                 session.exec(
                     delete(InterventionForecast).where(
-                        InterventionForecast.UniqueId == self.selected_id,
+                        InterventionForecast.UniqueId == self.selected_id.split("_")[1],
                         InterventionForecast.Version == version
                     )
                 )
@@ -466,35 +406,14 @@ class GTMState(SharedForecastState):
         except Exception as e:
             return rx.toast.error(f"Failed to delete forecast: {str(e)}")
 
-    def delete_current_forecast_version(self):
-        """Delete the current forecast version."""
-        return self.delete_forecast_version(self.current_forecast_version)
 
-    def delete_base_forecast(self):
-        """Delete base forecast (version 0)."""
-        try:
-            with rx.session() as session:
-                session.exec(
-                    delete(InterventionForecast).where(
-                        InterventionForecast.UniqueId == self.selected_id,
-                        InterventionForecast.Version == 0
-                    )
-                )
-                session.commit()
-            
-            self.base_forecast_data = []
-            self.has_base_forecast = False
-            self._update_chart_with_base()
-            
-            return rx.toast.success("Base forecast (v0) deleted")
-            
-        except Exception as e:
-            return rx.toast.error(f"Failed to delete base forecast: {str(e)}")
+    def set_year(self,year):
+        self.current_year = int(year)
 
     def load_forecast_summary_tables(self):
         """Load forecast summary data for current year and next year."""
         try:
-            current_year = datetime.now().year
+            current_year = self.set_year(2025)
             next_year = current_year + 1
             
             self.current_year = current_year
@@ -541,7 +460,7 @@ class GTMState(SharedForecastState):
                     latest_version = max(versions.keys())
                     records = versions[latest_version]
                     details = intervention_dict[uid]
-                    details["GTMYear"] = InterventionID.InterventionYear
+                    details["GTMYear"] = datetime.strptime(details["Date"],"%Y-%m-%d").year
 
                     current_year_monthly = {m: 0.0 for m in range(1, 13)}
                     next_year_monthly = {m: 0.0 for m in range(1, 13)}
@@ -630,37 +549,43 @@ class GTMState(SharedForecastState):
         except Exception as e:
             return rx.toast.error(f"Failed to download Excel: {str(e)}")
 
-    def download_both_years_excel(self):
-        """Download both years summary as single Excel file."""
-        if not self.current_year_summary and not self.next_year_summary:
-            return rx.toast.error("No forecast data available")
-        
+    
+
+    # CRUD for InterventionID
+    def add_intervention(self, form_data: dict):
+        """Add new GTM to database with validation."""
         try:
-            columns_order = [
-                "UniqueId", "Field", "Platform", "Reservoir", "Type", "Category",
-                "Status", "Date", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Total"
-            ]
+            if not form_data.get("UniqueId"):
+                return rx.toast.error("UniqueId is required!")
             
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                if self.current_year_summary:
-                    df_current = pd.DataFrame(self.current_year_summary)[columns_order]
-                    df_current.to_excel(writer, sheet_name=f'Qoil_{self.current_year}', index=False)
-                
-                if self.next_year_summary:
-                    df_next = pd.DataFrame(self.next_year_summary)[columns_order]
-                    df_next.to_excel(writer, sheet_name=f'Qoil_{self.next_year}', index=False)
+            if not form_data.get("PlanningDate"):
+                return rx.toast.error("Planning Date is required!")
             
-            output.seek(0)
-            return rx.download(
-                data=output.getvalue(),
-                filename=f"Intervention_Qoil_Forecast_{self.current_year}_{self.next_year}.xlsx",
-            )
+            # Server-side validation of numeric ranges
+            is_valid, error_msg = self._validate_numeric_ranges(form_data)
+            if not is_valid:
+                return rx.toast.error(f"Validation failed: {error_msg}")
+            
+            # Parse numeric fields
+            for field in ["InitialORate", "bo", "Dio", "InitialLRate", "bl", "Dil"]:
+                form_data[field] = float(form_data.get(field) or 0)
+            
+            # Set defaults
+            form_data.setdefault("Status", "Plan")
+            form_data.setdefault("Category", "")
+            form_data.setdefault("Describe", "")
+            form_data["InterventionYear"] = datetime.strptime(form_data["PlanningDate"],"%Y-%m-%d").year
+            
+            with rx.session() as session:
+                new_gtm = InterventionID(**form_data)
+                session.add(new_gtm)
+                session.commit()
+            
+            self.load_interventions()
+            return rx.toast.success("GTM added successfully!")
             
         except Exception as e:
-            return rx.toast.error(f"Failed to download Excel: {str(e)}")
-
+            return rx.toast.error(f"Failed to save GTM: {str(e)}")
     async def handle_excel_upload(self, files: List[rx.UploadFile]):
         """Handle Excel file upload for interventions with validation."""
         if not files:
@@ -673,8 +598,8 @@ class GTMState(SharedForecastState):
             
             required_cols = [
                 'UniqueId', 'Field', 'Platform', 'Reservoir', 'TypeGTM',
-                'PlanningDate', 'Status', 'InitialORate', 'bo', 'Dio',
-                'InitialLRate', 'bl', 'Dil'
+                'PlanningDate', 'InterventionYear', 'Status', 'InitialORate', 'bo', 'Dio',
+                'InitialLRate', 'bl', 'Dil', "Desrcribe"
             ]
             
             missing_cols = [c for c in required_cols if c not in df.columns]
@@ -699,33 +624,26 @@ class GTMState(SharedForecastState):
             
             with rx.session() as session:
                 for _, row in df.iterrows():
-                    existing = session.exec(
-                        select(InterventionID).where(InterventionID.UniqueId == str(row['UniqueId']))
-                    ).first()
                     
-                    if not existing:
-                        new_gtm = InterventionID(
-                            UniqueId=str(row['UniqueId']),
-                            Field=str(row['Field']),
-                            Platform=str(row['Platform']),
-                            Reservoir=str(row['Reservoir']),
-                            TypeGTM=str(row['TypeGTM']),
-                            Category=str(row.get('Category', '')),
-                            PlanningDate=str(row['PlanningDate'])[:10],
-                            Status=str(row['Status']),
-                            InitialORate=float(row['InitialORate']),
-                            bo=float(row['bo']),
-                            Dio=float(row['Dio']),
-                            InitialLRate=float(row['InitialLRate']),
-                            bl=float(row['bl']),
-                            Dil=float(row['Dil']),
-                            Describe=str(row.get('Describe', ''))
+                    new_gtm = InterventionID(
+                        UniqueId=str(row['UniqueId']),
+                        Field=str(row['Field']),
+                        Platform=str(row['Platform']),
+                        Reservoir=str(row['Reservoir']),
+                        TypeGTM=str(row['TypeGTM']),
+                        Category=str(row.get('Category', '')),
+                        PlanningDate=str(row['PlanningDate'])[:10],
+                        Status=str(row['Status']),
+                        InitialORate=float(row['InitialORate']),
+                        bo=float(row['bo']),
+                        Dio=float(row['Dio']),
+                        InitialLRate=float(row['InitialLRate']),
+                        bl=float(row['bl']),
+                        Dil=float(row['Dil']),
+                        Describe=str(row.get('Describe', ''))
                         )
-                        session.add(new_gtm)
-                        added_count += 1
-                    else:
-                        skipped_count += 1
-                
+                    session.add(new_gtm)
+                    added_count += 1
                 session.commit()
             
             self.load_interventions()
@@ -738,52 +656,18 @@ class GTMState(SharedForecastState):
             
         except Exception as e:
             return rx.toast.error(f"Failed to load Excel: {str(e)}")
-
-    def add_gtm(self, form_data: dict):
-        """Add new GTM to database with validation."""
-        try:
-            if not form_data.get("UniqueId"):
-                return rx.toast.error("UniqueId is required!")
-            
-            if not form_data.get("PlanningDate"):
-                return rx.toast.error("Planning Date is required!")
-            
-            # Server-side validation of numeric ranges
-            is_valid, error_msg = self._validate_numeric_ranges(form_data)
-            if not is_valid:
-                return rx.toast.error(f"Validation failed: {error_msg}")
-            
-            # Parse numeric fields
-            for field in ["InitialORate", "bo", "Dio", "InitialLRate", "bl", "Dil"]:
-                form_data[field] = float(form_data.get(field) or 0)
-            
-            # Set defaults
-            form_data.setdefault("Status", "Plan")
-            form_data.setdefault("Category", "")
-            form_data.setdefault("Describe", "")
-            
-            with rx.session() as session:              
-                new_gtm = InterventionID(**form_data)
-                session.add(new_gtm)
-                session.commit()
-            
-            self.load_interventions()
-            return rx.toast.success("GTM added successfully!")
-            
-        except Exception as e:
-            return rx.toast.error(f"Failed to save GTM: {str(e)}")
-
-    def get_gtm(self, gtm: InterventionID):
+    #Update intervention    
+    def get_gtm(self, intervention: InterventionID):
         """Set current GTM for editing."""
-        self.current_gtm = gtm
-
-    def update_gtm(self, form_data: dict):
+        self.current_intervention = intervention
+        
+    def update_intervention(self, form_data: dict):
         """Update existing GTM in database with validation."""
         try:
-            if not self.current_gtm:
+            if not self.current_intervention:
                 return rx.toast.error("No intervention selected for update")
             
-            unique_id = self.current_gtm.UniqueId
+            unique_id = self.current_intervention.UniqueId
             
             # Server-side validation of numeric ranges
             is_valid, error_msg = self._validate_numeric_ranges(form_data)
@@ -819,19 +703,19 @@ class GTMState(SharedForecastState):
                 session.add(gtm_to_update)
                 session.commit()
                 session.refresh(gtm_to_update)
-                self.current_gtm = gtm_to_update
+                self.current_intervention = gtm_to_update
             
             self.load_interventions()
             
-            if self.selected_id == unique_id:
-                self.intervention_date = self.current_gtm.PlanningDate
+            if self.selected_id.split("_")[1] == unique_id:
+                self.intervention_date = self.current_intervention.PlanningDate
             
             return rx.toast.success(f"Intervention '{unique_id}' updated successfully!")
             
         except Exception as e:
-            return rx.toast.error(f"Failed to update GTM: {str(e)}")
-
-    def delete_gtm(self, unique_id: str):
+            return rx.toast.error(f"Failed to update Intervention: {str(e)}")
+    #delete intervention
+    def delete_intervention(self, unique_id: str):
         """Delete GTM from database."""
         try:
             with rx.session() as session:
@@ -855,15 +739,15 @@ class GTMState(SharedForecastState):
     
     @rx.var
     def total_interventions(self) -> int:
-        return len(self.GTM)
+        return len(self.interventions)
     
     @rx.var
     def planned_interventions(self) -> int:
-        return sum(1 for gtm in self.GTM if gtm.Status == "Plan")
+        return sum(1 for gtm in self.interventions if gtm.Status == "Plan")
     
     @rx.var
     def completed_interventions(self) -> int:
-        return sum(1 for gtm in self.GTM if gtm.Status == "Done")
+        return sum(1 for gtm in self.interventions if gtm.Status == "Done")
     
     
     
@@ -916,30 +800,4 @@ class GTMState(SharedForecastState):
     @rx.var
     def next_year_count(self) -> int:
         return len(self.next_year_summary)
-    @rx.var
-    def gtm_type_plotly(self) -> go.Figure:
-        """Generate a Plotly bar chart for GTM types."""
-        if not self.gtms_for_graph:
-            return go.Figure()
-            
-        names = [d["name"] for d in self.gtms_for_graph]
-        values = [d["value"] for d in self.gtms_for_graph]
-        
-        fig = go.Figure(data=[
-            go.Bar(
-                x=names, y=values,
-                marker_color="#3b82f6",
-                text=values,
-                textposition='auto',
-            )
-        ])
-        
-        fig.update_layout(
-            height=250,
-            margin=dict(l=20, r=20, t=20, b=20),
-            xaxis=dict(tickangle=-45),
-            yaxis=dict(title="Count"),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-        )
-        return fig
+    
