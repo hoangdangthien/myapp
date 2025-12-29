@@ -17,7 +17,7 @@ Technology Stack:
 import reflex as rx
 
 # Import all pages - this registers them with the app
-from .pages import production_page, well_intervention_page
+from .pages import well_intervention_page
 
 
 # Create the application with theme configuration
