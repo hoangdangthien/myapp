@@ -5,17 +5,18 @@ import sqlalchemy as sa
 from datetime import datetime
 
 
-class Intervention(rx.Model, table=True):
+class InterventionID(rx.Model, table=True):
     """The intervention ID information - stores well intervention records."""
     __tablename__ = "InterventionID"
-    ID : int = sqlmodel.Field(primary_key=True)
+    ID: int = sqlmodel.Field(primary_key=True)
     UniqueId: str 
     Field: str
     Platform: str
     Reservoir: str
     TypeGTM: str
-    Category: str        #using drilling platform, not using platform
+    Category: str        # using drilling platform, not using platform
     PlanningDate: str
+    InterventionYear: int
     Status: str
     InitialORate: float  # Initial Oil Rate (bbl/day)
     bo: float            # Arps decline parameter b for oil
@@ -23,14 +24,14 @@ class Intervention(rx.Model, table=True):
     InitialLRate: float  # Initial Liquid Rate (bbl/day)
     bl: float            # Arps decline parameter b for liquid
     Dil: float           # Initial decline rate for liquid
-    Describe : str       # Describe Intervention activity
+    Describe: str        # Describe Intervention activity
 
 
 class InterventionForecast(rx.Model, table=True):
     """The intervention production information - stores production history and forecasts.
     
     Version field:
-        - 0: Base case forecast from the last record of history before Intervention date and cannot delete by button
+        - 0: Base case forecast from the last record of history before Intervention date
         - 1, 2, 3: Forecast versions (FIFO - max 3 versions kept)
     
     DataType field:
@@ -39,47 +40,60 @@ class InterventionForecast(rx.Model, table=True):
     """
     __tablename__ = "InterventionForecast"
     
-    UniqueId: str = sqlmodel.Field(primary_key=True, max_length=255)
+    ID: int = sqlmodel.Field(primary_key=True)
+    UniqueId: str = sqlmodel.Field(max_length=255)
     Date: datetime = sqlmodel.Field(primary_key=True)
     Version: int = sqlmodel.Field(default=0, primary_key=True)
     DataType: str = sqlmodel.Field(default="Forecast")
     OilRate: float      # Oil production rate (ton/day)
     LiqRate: float      # Liquid production rate (ton/day)
-    Qoil: float      # Cumulative oil production in month (ton) : OilProd = K_int*Dayon*OilRate
-    Qliq: float      # Cumulative liquid production in month (ton): LiqProd = K_int*Dayon*LiqRate
+    Qoil: float         # Cumulative oil production in month (ton)
+    Qliq: float         # Cumulative liquid production in month (ton)
     WC: float           # Water cut (%) = (Qliq-Qoil)/Qliq*100
     CreatedAt: datetime = sqlmodel.Field(default_factory=datetime.now)
 
 
 class CompletionID(rx.Model, table=True):
+    """Completion ID with decline curve parameters.
+    
+    Decline Parameters:
+        - Do: Base oil decline rate (1/year)
+        - Dl: Base liquid decline rate (1/year)
+        - Dip: Platform-level decline adjustment factor
+        - Dir: Reservoir+Field level decline adjustment factor
+    
+    Effective Decline Rate Formula:
+        Di_effective = Do * (1 + Dip) * (1 + Dir)
+    """
     __tablename__ = "CompletionID"
     UniqueId: str = sqlmodel.Field(primary_key=True, max_length=255)
     WellName: str 
     X_top: float
     Y_top: float
-    Z_top :float
+    Z_top: float
     X_bot: float
     Y_bot: float
-    Z_bot : float
-    Reservoir : str
-    Completion: str
-    KH : float
-    Do : float  # Di for Exponential DCA for oil phase
-    Dl : float # Di for Exponential DCA for liquid phase
+    Z_bot: float
+    Reservoir: str
+    KH: float
+    Do: float           # Base Di for Exponential DCA for oil phase (1/year)
+    Dl: float           # Base Di for Exponential DCA for liquid phase (1/year)
+    Dip: float = 0.0    # Platform-level decline adjustment factor
+    Dir: float = 0.0    # Reservoir+Field level decline adjustment factor
 
 
-class WellID(rx.Model,table=True):
+class WellID(rx.Model, table=True):
     __tablename__ = "WellID"
-    WellName : str = sqlmodel.Field(primary_key=True,max_length=255)
-    X_coord : float
-    Y_coord : float
-    Platform : str
-    Region : str
-    Field : str
-    Block : str
-    VSPShare : float
-    WellCategory : str      #OIL,GAS,COND,INJ
-    WellStatus : str        #Working, Abandone        
+    WellName: str = sqlmodel.Field(primary_key=True, max_length=255)
+    X_coord: float
+    Y_coord: float
+    Platform: str
+    Region: str
+    Field: str
+    Block: str
+    VSPShare: float
+    WellCategory: str      # OIL, GAS, COND, INJ
+    WellStatus: str        # Working, Abandone        
 
 
 class HistoryProd(rx.Model, table=True):
@@ -112,19 +126,37 @@ class ProductionForecast(rx.Model, table=True):
     Version: int = sqlmodel.Field(default=1, primary_key=True)
     OilRate: float
     LiqRate: float
-    Qoil: float         # Cumulative oil in month Qoil = K_oil*Dayon*Oilrate
-    Qliq: float         # Cumulative liquid in month Qliq = K_liq*Dayon*Liqrate
-    WC: float           # WC = (Qliq-Qoil)/Qoil*100
+    Qoil: float         # Cumulative oil in month
+    Qliq: float         # Cumulative liquid in month
+    WC: float           # WC = (Qliq-Qoil)/Qliq*100
     CreatedAt: datetime = sqlmodel.Field(default_factory=datetime.now)
 
 
 class KMonth(rx.Model, table=True):
     __tablename__ = "KMonth"
     MonthID: int = sqlmodel.Field(primary_key=True)
-    K_oil: float        #uptime for oil phase
-    K_liq: float        #uptime for liquid phase
-    K_int : float       #uptime for intervention
-    K_inj : float       #uptime for injection
+    K_oil: float        # uptime for oil phase
+    K_liq: float        # uptime for liquid phase
+    K_int: float        # uptime for intervention
+    K_inj: float        # uptime for injection
+
+
+class DeclineAdjustment(rx.Model, table=True):
+    """Decline adjustment parameters by Platform and Reservoir+Field.
+    
+    This table stores Dip (platform-level) and Dir (reservoir+field level) adjustments.
+    - Dip: Adjustment for all completions on a platform
+    - Dir: Adjustment for all completions in a specific reservoir of a specific field
+    """
+    __tablename__ = "DeclineAdjustment"
+    ID: int = sqlmodel.Field(primary_key=True)
+    AdjustmentType: str     # "Platform" or "ReservoirField"
+    Platform: str = ""      # Platform name for Dip
+    Field: str = ""         # Field name for Dir
+    Reservoir: str = ""     # Reservoir name for Dir
+    AdjustmentValue: float = 0.0  # Dip or Dir value
+    Description: str = ""   # Optional description
+    UpdatedAt: datetime = sqlmodel.Field(default_factory=datetime.now)
 
 
 # Field options for dropdown selections
@@ -151,7 +183,7 @@ RESERVOIR_OPTIONS = [
     "Lower Oligocene", "Basement"
 ]
 
-# GTM Type options - English well intervention types
+# GTM Type options
 GTM_TYPE_OPTIONS = [
     "Infill well",
     "Hydraulic Fracturing",
@@ -168,28 +200,16 @@ GTM_TYPE_OPTIONS = [
     "Acidizing",
     "Sand Control",
 ]
+
 GTM_CATEGORY_OPTIONS = [
-    "Using drilling Platform",
-    "Not using drilling Platform"
+    "Using Drilling Platform",
+    "Not Using Platform",
+    "Exploration well",
+    "Other"
 ]
+
 # Status options
 STATUS_OPTIONS = ["Plan", "Done", "Cancelled"]
 
-# GTM Type mapping for reference
-GTM_TYPE_MAPPING = {
-    "ВНС": "Well Completion",
-    "ГРП": "Hydraulic Fracturing",
-    "ПВЛГ": "Perforation",
-    "УЭЦН": "ESP Installation",
-    "ЗБС": "Sidetrack",
-    "РИР": "Workover",
-    "ОПЗ": "Stimulation",
-    "ПВР (через НКТ)": "Perforation Through Tubing",
-    "TPO": "Routine Maintenance",
-    "Смена ВСО": "Equipment Change",
-    "Перевод в добычу из ППД": "Injection to Production",
-    "Нормализация забоя": "Bottomhole Normalization",
-}
-
 MAX_FORECAST_VERSIONS = 3
-MAX_PRODUCTION_FORECAST_VERSIONS = 4  # For ProductionForecast table
+MAX_PRODUCTION_FORECAST_VERSIONS = 4
