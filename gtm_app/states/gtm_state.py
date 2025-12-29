@@ -636,7 +636,7 @@ class GTMState(SharedForecastState):
                         rec_date = rec.Date if isinstance(rec.Date, datetime) else datetime.strptime(str(rec.Date), "%Y-%m-%d")
                         rec_year = rec_date.year
                         rec_month = rec_date.month
-                        qoil = rec.Qoil if rec.Qoil else 0.0
+                        qoil = round(rec.Qoil/1000,3) if rec.Qoil else 0.0
                         
                         # Only sum Qoil for current_year (2025)
                         if rec_year == current_year:
@@ -657,11 +657,11 @@ class GTMState(SharedForecastState):
                     
                     total_qoil = 0.0
                     for i, name in enumerate(month_names, 1):
-                        row[name] = round(monthly_qoil[i], 1)
+                        row[name] = monthly_qoil[i]
                         current_year_totals[i] += monthly_qoil[i]
                         total_qoil += monthly_qoil[i]
                     
-                    row["Total"] = round(total_qoil / 1000, 1)  # in thousands
+                    row["Total"] = total_qoil  # in thousands
                     
                     # Include row even if some months have 0 (intervention might start mid-year)
                     current_year_data.append(row)
@@ -680,8 +680,8 @@ class GTMState(SharedForecastState):
                         "GTMYear": current_year,
                     }
                     for i, name in enumerate(month_names, 1):
-                        total_row[name] = round(current_year_totals[i], 1)
-                    total_row["Total"] = round(sum(current_year_totals.values()) / 1000, 1)
+                        total_row[name] = current_year_totals[i]
+                    total_row["Total"] = sum(current_year_totals.values())
                     current_year_data.append(total_row)
                 
                 # Process 2026 interventions
@@ -691,8 +691,11 @@ class GTMState(SharedForecastState):
                 for intv_id, details in intervention_dict_2026.items():
                     uid = details["UniqueId"]
                     
-                    
+                    if intv_id not in forecast_by_id:
+                        continue
                     versions = forecast_by_id[intv_id]
+                    if not versions:
+                        continue
                     latest_version = max(versions.keys())
                     records = versions[latest_version]
                     
@@ -705,7 +708,7 @@ class GTMState(SharedForecastState):
                         rec_date = rec.Date if isinstance(rec.Date, datetime) else datetime.strptime(str(rec.Date), "%Y-%m-%d")
                         rec_year = rec_date.year
                         rec_month = rec_date.month
-                        qoil = rec.Qoil if rec.Qoil else 0.0
+                        qoil = round(rec.Qoil/1000,3) if rec.Qoil else 0.0
                         
                         # Only sum Qoil for next_year (2026)
                         if rec_year == next_year:
@@ -726,11 +729,11 @@ class GTMState(SharedForecastState):
                     
                     total_qoil = 0.0
                     for i, name in enumerate(month_names, 1):
-                        row[name] = round(monthly_qoil[i], 1)
+                        row[name] = monthly_qoil[i]
                         next_year_totals[i] += monthly_qoil[i]
                         total_qoil += monthly_qoil[i]
                     
-                    row["Total"] = round(total_qoil / 1000, 1)
+                    row["Total"] = total_qoil
                     
                     # Include row even if some months have 0
                     next_year_data.append(row)
@@ -750,8 +753,8 @@ class GTMState(SharedForecastState):
                         "GTMYear": next_year,
                     }
                     for i, name in enumerate(month_names, 1):
-                        total_row[name] = round(next_year_totals[i], 1)
-                    total_row["Total"] = round(sum(next_year_totals.values()) / 1000, 1)
+                        total_row[name] = next_year_totals[i]
+                    total_row["Total"] = sum(next_year_totals.values()) 
                     next_year_data.append(total_row)
                 
                 # Sort by UniqueId (TOTAL will be at end due to alphabetical sorting)
