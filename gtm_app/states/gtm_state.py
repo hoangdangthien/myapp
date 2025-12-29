@@ -539,6 +539,8 @@ class GTMState(SharedForecastState):
         self.current_year = int(year)
         return self.current_year
 
+    # gtm_app/states/gtm_state.py
+
     def load_forecast_summary_tables(self):
         """Load forecast summary data for current year and next year.
         
@@ -562,16 +564,17 @@ class GTMState(SharedForecastState):
                         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
             
             with rx.session() as session:
-                # Get all interventions
+                # Get all interventions directly from database to ensure fresh data
                 all_interventions = session.exec(select(InterventionID)).all()
                 
                 # Filter interventions by InterventionYear
-                interventions_2025 = [g for g in self._all_interventions if g.InterventionYear == current_year]
-                interventions_2026 = [g for g in self._all_interventions if g.InterventionYear == next_year]
-                
-                # Create lookup dictionaries
+                interventions_2025 = [g for g in all_interventions if g.InterventionYear == current_year]
+                interventions_2026 = [g for g in all_interventions if g.InterventionYear == next_year]
+            
+                # Create lookup dictionaries keyed by ID (not UniqueId)
                 intervention_dict_2025 = {
-                    gtm.UniqueId: {
+                    gtm.ID: {
+                        "UniqueId": gtm.UniqueId,
                         "Field": gtm.Field,
                         "Platform": gtm.Platform,
                         "Reservoir": gtm.Reservoir,
@@ -585,7 +588,8 @@ class GTMState(SharedForecastState):
                 }
                 
                 intervention_dict_2026 = {
-                    gtm.UniqueId: {
+                    gtm.ID: {
+                        "UniqueId": gtm.UniqueId,
                         "Field": gtm.Field,
                         "Platform": gtm.Platform,
                         "Reservoir": gtm.Reservoir,
@@ -603,29 +607,27 @@ class GTMState(SharedForecastState):
                     select(InterventionForecast).where(InterventionForecast.Version > 0)
                 ).all()
                 
-                # Group forecasts by UniqueId and Version
-                forecast_by_uid: Dict[str, Dict[int, List]] = {}
+                # Group forecasts by ID (intervention ID) and Version
+                forecast_by_id: Dict[int, Dict[int, List]] = {}
                 for rec in forecast_records:
-                    uid = rec.UniqueId
+                    intv_id = rec.ID  # Use ID, not UniqueId
                     ver = rec.Version
-                    if uid not in forecast_by_uid:
-                        forecast_by_uid[uid] = {}
-                    if ver not in forecast_by_uid[uid]:
-                        forecast_by_uid[uid][ver] = []
-                    forecast_by_uid[uid][ver].append(rec)
+                    if intv_id not in forecast_by_id:
+                        forecast_by_id[intv_id] = {}
+                    if ver not in forecast_by_id[intv_id]:
+                        forecast_by_id[intv_id][ver] = []
+                    forecast_by_id[intv_id][ver].append(rec)
                 
                 # Process 2025 interventions
                 current_year_data = []
                 current_year_totals = {m: 0.0 for m in range(1, 13)}
                 
-                for uid in intervention_dict_2025.keys():
-                    if uid not in forecast_by_uid:
-                        continue
+                for intv_id, details in intervention_dict_2025.items():
+                    uid = details["UniqueId"]
                     
-                    versions = forecast_by_uid[uid]
+                    versions = forecast_by_id[intv_id]
                     latest_version = max(versions.keys())
                     records = versions[latest_version]
-                    details = intervention_dict_2025[uid]
                     
                     # Monthly Qoil for current year only
                     monthly_qoil = {m: 0.0 for m in range(1, 13)}
@@ -653,14 +655,16 @@ class GTMState(SharedForecastState):
                         "GTMYear": details["GTMYear"],
                     }
                     
+                    total_qoil = 0.0
                     for i, name in enumerate(month_names, 1):
                         row[name] = round(monthly_qoil[i], 1)
                         current_year_totals[i] += monthly_qoil[i]
+                        total_qoil += monthly_qoil[i]
                     
-                    row["Total"] = round(sum(monthly_qoil.values()) / 1000, 1)  # in thousands
+                    row["Total"] = round(total_qoil / 1000, 1)  # in thousands
                     
-                    if sum(monthly_qoil.values()) > 0:
-                        current_year_data.append(row)
+                    # Include row even if some months have 0 (intervention might start mid-year)
+                    current_year_data.append(row)
                 
                 # Add total row for 2025
                 if current_year_data:
@@ -684,14 +688,15 @@ class GTMState(SharedForecastState):
                 next_year_data = []
                 next_year_totals = {m: 0.0 for m in range(1, 13)}
                 
-                for uid in intervention_dict_2026.keys():
-                    if uid not in forecast_by_uid:
-                        continue
+                for intv_id, details in intervention_dict_2026.items():
+                    uid = details["UniqueId"]
                     
-                    versions = forecast_by_uid[uid]
+                    
+                    versions = forecast_by_id[intv_id]
                     latest_version = max(versions.keys())
                     records = versions[latest_version]
-                    details = intervention_dict_2026[uid]
+                    
+        
                     
                     # Monthly Qoil for next year only
                     monthly_qoil = {m: 0.0 for m in range(1, 13)}
@@ -719,14 +724,17 @@ class GTMState(SharedForecastState):
                         "GTMYear": details["GTMYear"],
                     }
                     
+                    total_qoil = 0.0
                     for i, name in enumerate(month_names, 1):
                         row[name] = round(monthly_qoil[i], 1)
                         next_year_totals[i] += monthly_qoil[i]
+                        total_qoil += monthly_qoil[i]
                     
-                    row["Total"] = round(sum(monthly_qoil.values()) / 1000, 1)
+                    row["Total"] = round(total_qoil / 1000, 1)
                     
-                    if sum(monthly_qoil.values()) > 0:
-                        next_year_data.append(row)
+                    # Include row even if some months have 0
+                    next_year_data.append(row)
+                    #print(f"DEBUG: Added 2026 row for {uid}, Total={row['Total']}")
                 
                 # Add total row for 2026
                 if next_year_data:
@@ -762,9 +770,6 @@ class GTMState(SharedForecastState):
             traceback.print_exc()
             self.current_year_summary = []
             self.next_year_summary = []
-
-
-
 
     def download_current_year_excel(self):
         """Download current year summary as Excel file."""
@@ -823,7 +828,7 @@ class GTMState(SharedForecastState):
             form_data.setdefault("Category", "")
             form_data.setdefault("Describe", "")
             form_data["InterventionYear"] = datetime.strptime(form_data["PlanningDate"], "%Y-%m-%d").year
-            
+            print(f"Debug : {form_data["PlanningDate"]}")
             with rx.session() as session:
                 new_gtm = InterventionID(**form_data)
                 session.add(new_gtm)
@@ -920,7 +925,7 @@ class GTMState(SharedForecastState):
                 gtm_to_update = session.exec(
                     select(InterventionID).where(InterventionID.ID == intervention_id)
                 ).first()
-                
+
                 if not gtm_to_update:
                     return rx.toast.error(f"Intervention ID '{intervention_id}' not found")
                 
@@ -931,6 +936,7 @@ class GTMState(SharedForecastState):
                     if value is not None and str(value).strip():
                         setattr(gtm_to_update, field, str(value).strip())
                 
+                setattr(gtm_to_update,"InterventionYear",datetime.strptime(form_data.get("PlanningDate"),"%Y-%m-%d").year)
                 numeric_fields = ["InitialORate", "bo", "Dio", "InitialLRate", "bl", "Dil"]
                 for field in numeric_fields:
                     value = form_data.get(field)
