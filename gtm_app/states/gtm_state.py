@@ -85,11 +85,7 @@ class GTMState(SharedForecastState):
     # ========== Summary Table Filters ==========
     selected_summary_phase: str = "oil"  # "oil" or "liquid"
     selected_summary_year: int = 2025
-    summary_search_field: str = ""
-    summary_search_platform: str = ""
-    summary_search_reservoir: str = ""
-    summary_search_type: str = ""
-    summary_search_category: str = ""
+    summary_search_text: str = ""
     
     # Raw data storage for filtering (internal use)
     _current_year_summary_raw: List[dict] = []
@@ -877,38 +873,14 @@ class GTMState(SharedForecastState):
     
     # --- Search Filter Methods ---
 
-    def set_summary_search_field(self, value: str):
-        """Filter summary by field."""
-        self.summary_search_field = value
-        self._apply_summary_filters()
-
-    def set_summary_search_platform(self, value: str):
-        """Filter summary by platform."""
-        self.summary_search_platform = value
-        self._apply_summary_filters()
-
-    def set_summary_search_reservoir(self, value: str):
-        """Filter summary by reservoir."""
-        self.summary_search_reservoir = value
-        self._apply_summary_filters()
-
-    def set_summary_search_type(self, value: str):
-        """Filter summary by type."""
-        self.summary_search_type = value
-        self._apply_summary_filters()
-
-    def set_summary_search_category(self, value: str):
-        """Filter summary by category."""
-        self.summary_search_category = value
+    def set_summary_search_text(self, value: str):
+        """Filter summary by search text across all columns."""
+        self.summary_search_text = value
         self._apply_summary_filters()
 
     def clear_summary_filters(self):
-        """Clear all summary table filters."""
-        self.summary_search_field = ""
-        self.summary_search_platform = ""
-        self.summary_search_reservoir = ""
-        self.summary_search_type = ""
-        self.summary_search_category = ""
+        """Clear summary table search filter."""
+        self.summary_search_text = ""
         self._apply_summary_filters()
 
     # --- Internal Filter Methods ---
@@ -928,30 +900,28 @@ class GTMState(SharedForecastState):
             return []
         
         filtered = []
+        search_lower = self.summary_search_text.lower().strip() if self.summary_search_text else ""
+        
         for row in data:
             # Skip TOTAL row from filtering, always include at end
             if row.get("UniqueId") == "TOTAL":
                 continue
             
-            # Apply filters (case-insensitive partial match)
-            if self.summary_search_field:
-                if self.summary_search_field.lower() not in str(row.get("Field", "")).lower():
-                    continue
-            
-            if self.summary_search_platform:
-                if self.summary_search_platform.lower() not in str(row.get("Platform", "")).lower():
-                    continue
-            
-            if self.summary_search_reservoir:
-                if self.summary_search_reservoir.lower() not in str(row.get("Reservoir", "")).lower():
-                    continue
-            
-            if self.summary_search_type:
-                if self.summary_search_type.lower() not in str(row.get("Type", "")).lower():
-                    continue
-            
-            if self.summary_search_category:
-                if self.summary_search_category.lower() not in str(row.get("Category", "")).lower():
+            # If search text provided, check across all searchable columns
+            if search_lower:
+                # Search in: UniqueId, Field, Platform, Reservoir, Type, Category, Status
+                searchable_fields = [
+                    str(row.get("UniqueId", "")),
+                    str(row.get("Field", "")),
+                    str(row.get("Platform", "")),
+                    str(row.get("Reservoir", "")),
+                    str(row.get("Type", "")),
+                    str(row.get("Category", "")),
+                    str(row.get("Status", "")),
+                ]
+                
+                # Check if search text matches any field
+                if not any(search_lower in field.lower() for field in searchable_fields):
                     continue
             
             filtered.append(row)
@@ -1602,13 +1572,7 @@ class GTMState(SharedForecastState):
     @rx.var
     def has_summary_filters(self) -> bool:
         """Check if any summary filters are active."""
-        return bool(
-            self.summary_search_field or
-            self.summary_search_platform or
-            self.summary_search_reservoir or
-            self.summary_search_type or
-            self.summary_search_category
-        )
+        return bool(self.summary_search_text)
 
     @rx.var
     def current_year_filtered_count(self) -> int:
