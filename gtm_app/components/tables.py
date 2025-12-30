@@ -29,7 +29,7 @@ def show_intervention(intervention: InterventionID) -> rx.Component:
         rx.table.cell(rx.text(f"{intervention.Dil:.3f}", size="1")),
         rx.table.cell(rx.hstack(update_intervention_dialog(intervention), delete_intervention_dialog(intervention), spacing="1")),
         style={"_hover": {"bg": rx.color("gray", 3)}},
-        align="center",
+        align="center",#on_click=lambda: GTMState.set_selected_id(str(intervention.ID)+"_"+intervention.UniqueId)
     )
 
 def intervention_table() -> rx.Component:
@@ -54,7 +54,7 @@ def intervention_table() -> rx.Component:
                     rx.table.column_header_cell(rx.text("Actions", size="1", weight="bold")),
                 ),
             ),
-            rx.table.body(rx.foreach(GTMState.GTM, show_intervention)),
+            rx.table.body(rx.foreach(GTMState.interventions, show_intervention)),
             variant="surface",
             size="1",
             width="100%",
@@ -121,7 +121,7 @@ def show_completion_row(completion: CompletionID) -> rx.Component:
         rx.table.cell(update_completion_dialog(completion),),
         style={"_hover": {"bg": rx.color("gray", 3)}, "cursor": "pointer"},
         align="center",
-        on_click=lambda: ProductionState.set_selected_unique_id(completion.UniqueId),
+        on_click=lambda: ProductionState.set_selected_id(completion.UniqueId),
     )
 
 def completion_table() -> rx.Component:
@@ -182,6 +182,133 @@ def completion_table() -> rx.Component:
         width="100%",
     )
 #Show summary Intervention
+def summary_phase_selector() -> rx.Component:
+    """Phase selector for switching between Oil and Liquid."""
+    return rx.hstack(
+        rx.text("Phase:", size="2", weight="bold"),
+        rx.select(
+            ["oil","liquid"],
+            value=GTMState.selected_summary_phase,
+            on_change=GTMState.set_summary_phase,
+            size="1",
+        ),
+        spacing="2",
+        align="center",
+    )
+
+
+def summary_year_selector() -> rx.Component:
+    """Year selector dropdown (2025-2050)."""
+    return rx.hstack(
+        rx.text("Year:", size="2", weight="bold"),
+        rx.select(
+            GTMState.year_options_str,
+            value=GTMState.selected_year_str,
+            on_change=GTMState.set_summary_year,
+            size="1",
+            width="100px",
+        ),
+        spacing="2",
+        align="center",
+    )
+
+
+def summary_search_filters() -> rx.Component:
+    """Search filters for summary table columns."""
+    return rx.hstack(
+        rx.input(
+            rx.input.slot(rx.icon("search", size=14)),
+            placeholder="Field...",
+            size="1",
+            width="100px",
+            value=GTMState.summary_search_field,
+            on_change=GTMState.set_summary_search_field,
+            debounce_timeout=300,
+        ),
+        rx.input(
+            placeholder="Platform...",
+            size="1",
+            width="100px",
+            value=GTMState.summary_search_platform,
+            on_change=GTMState.set_summary_search_platform,
+            debounce_timeout=300,
+        ),
+        rx.input(
+            placeholder="Reservoir...",
+            size="1",
+            width="100px",
+            value=GTMState.summary_search_reservoir,
+            on_change=GTMState.set_summary_search_reservoir,
+            debounce_timeout=300,
+        ),
+        rx.input(
+            placeholder="Type...",
+            size="1",
+            width="100px",
+            value=GTMState.summary_search_type,
+            on_change=GTMState.set_summary_search_type,
+            debounce_timeout=300,
+        ),
+        rx.input(
+            placeholder="Category...",
+            size="1",
+            width="100px",
+            value=GTMState.summary_search_category,
+            on_change=GTMState.set_summary_search_category,
+            debounce_timeout=300,
+        ),
+        rx.cond(
+            GTMState.has_summary_filters,
+            rx.button(
+                rx.icon("x", size=14),
+                rx.text("Clear", size="1"),
+                variant="ghost",
+                color_scheme="gray",
+                size="1",
+                on_click=GTMState.clear_summary_filters,
+            ),
+            rx.fragment(),
+        ),
+        spacing="2",
+        align="center",
+        wrap="wrap",
+    )
+
+
+def summary_controls_bar() -> rx.Component:
+    """Combined control bar with phase, year, and filters."""
+    return rx.card(
+        rx.vstack(
+            rx.hstack(
+                summary_phase_selector(),
+                rx.divider(orientation="vertical", size="2"),
+                summary_year_selector(),
+                rx.spacer(),
+                rx.button(
+                    rx.icon("file-spreadsheet", size=16),
+                    rx.text("Download All", size="2"),
+                    on_click=GTMState.download_both_years_excel,
+                    size="1",
+                    variant="soft",
+                    color_scheme="blue",
+                ),
+                width="100%",
+                align="center",
+            ),
+            rx.divider(),
+            rx.hstack(
+                rx.text("Filters:", size="1", weight="bold", color=rx.color("gray", 10)),
+                summary_search_filters(),
+                width="100%",
+                align="center",
+            ),
+            width="100%",
+            spacing="2",
+        ),
+        padding="0.75em",
+        width="100%",
+    )
+
 def summary_intervention_row(row: dict) -> rx.Component:
     """Render a single row in the summary table."""
     return rx.table.row(
@@ -204,7 +331,6 @@ def summary_intervention_row(row: dict) -> rx.Component:
         ),
         rx.table.cell(rx.text(row["Date"], size="1")),
         rx.table.cell(rx.text(row["GTMYear"], size="1")),
-        # Monthly Qoil columns
         rx.table.cell(rx.text(row["Jan"], size="1")),
         rx.table.cell(rx.text(row["Feb"], size="1")),
         rx.table.cell(rx.text(row["Mar"], size="1")),
@@ -226,7 +352,7 @@ def summary_intervention_row(row: dict) -> rx.Component:
 
 
 def summary_intervention_header() -> rx.Component:
-    """Common header for summary tables."""
+    """Header for summary tables."""
     return rx.table.header(
         rx.table.row(
             rx.table.column_header_cell(rx.text("UniqueId", size="1", weight="bold")),
@@ -256,13 +382,16 @@ def summary_intervention_header() -> rx.Component:
 
 
 def current_year_intervention_table() -> rx.Component:
-    """Summary table for current year Qoil forecast by intervention."""
+    """Summary table for current year with dynamic phase display."""
     return rx.card(
         rx.vstack(
             rx.hstack(
                 rx.hstack(
                     rx.icon("calendar", size=18, color=rx.color("blue", 9)),
-                    rx.heading(f"Qoil Forecast {GTMState.current_year} (tons)", size="4"),
+                    rx.heading(
+                        f"{GTMState.phase_display_summary} Forecast {GTMState.current_year} (th.tons)",
+                        size="4"
+                    ),
                     spacing="2",
                     align="center",
                 ),
@@ -270,8 +399,8 @@ def current_year_intervention_table() -> rx.Component:
                 rx.hstack(
                     rx.badge(
                         rx.hstack(
-                            rx.text("Interventions:", size="1"),
-                            rx.text(GTMState.current_year_count, weight="bold", size="1"),
+                            rx.text("Shown:", size="1"),
+                            rx.text(GTMState.current_year_filtered_count, weight="bold", size="1"),
                             spacing="1",
                         ),
                         color_scheme="blue",
@@ -279,13 +408,13 @@ def current_year_intervention_table() -> rx.Component:
                     ),
                     rx.badge(
                         rx.hstack(
-                            rx.text("Total Qoil:", size="1"),
+                            rx.text(f"Total:", size="1"),
                             rx.text(
                                 GTMState.current_year_total_qoil.to(int).to(str),
                                 weight="bold",
                                 size="1"
                             ),
-                            rx.text("t", size="1"),
+                            rx.text("th.t", size="1"),
                             spacing="1",
                         ),
                         color_scheme="green",
@@ -307,7 +436,7 @@ def current_year_intervention_table() -> rx.Component:
             ),
             rx.divider(),
             rx.cond(
-                GTMState.current_year_count > 0,
+                GTMState.current_year_filtered_count > 0,
                 rx.box(
                     rx.table.root(
                         summary_intervention_header(),
@@ -330,9 +459,18 @@ def current_year_intervention_table() -> rx.Component:
                     rx.vstack(
                         rx.icon("inbox", size=32, color=rx.color("gray", 8)),
                         rx.text(
-                            "No forecast data for current year",
+                            f"No data for {GTMState.current_year}",
                             size="2",
                             color=rx.color("gray", 10)
+                        ),
+                        rx.cond(
+                            GTMState.has_summary_filters,
+                            rx.text(
+                                "Try adjusting your filters",
+                                size="1",
+                                color=rx.color("gray", 9)
+                            ),
+                            rx.fragment(),
                         ),
                         spacing="2",
                         align="center",
@@ -349,13 +487,16 @@ def current_year_intervention_table() -> rx.Component:
 
 
 def next_year_intervention_table() -> rx.Component:
-    """Summary table for next year Qoil forecast by intervention."""
+    """Summary table for next year with dynamic phase display."""
     return rx.card(
         rx.vstack(
             rx.hstack(
                 rx.hstack(
                     rx.icon("calendar-plus", size=18, color=rx.color("orange", 9)),
-                    rx.heading(f"Qoil Forecast {GTMState.next_year} (tons)", size="4"),
+                    rx.heading(
+                        f"{GTMState.phase_display_summary} Forecast {GTMState.next_year} (th.tons)",
+                        size="4"
+                    ),
                     spacing="2",
                     align="center",
                 ),
@@ -363,8 +504,8 @@ def next_year_intervention_table() -> rx.Component:
                 rx.hstack(
                     rx.badge(
                         rx.hstack(
-                            rx.text("Interventions:", size="1"),
-                            rx.text(GTMState.next_year_count, weight="bold", size="1"),
+                            rx.text("Shown:", size="1"),
+                            rx.text(GTMState.next_year_filtered_count, weight="bold", size="1"),
                             spacing="1",
                         ),
                         color_scheme="orange",
@@ -372,13 +513,13 @@ def next_year_intervention_table() -> rx.Component:
                     ),
                     rx.badge(
                         rx.hstack(
-                            rx.text("Total Qoil:", size="1"),
+                            rx.text(f"Total:", size="1"),
                             rx.text(
                                 GTMState.next_year_total_qoil.to(int).to(str),
                                 weight="bold",
                                 size="1"
                             ),
-                            rx.text("t", size="1"),
+                            rx.text("th.t", size="1"),
                             spacing="1",
                         ),
                         color_scheme="green",
@@ -400,7 +541,7 @@ def next_year_intervention_table() -> rx.Component:
             ),
             rx.divider(),
             rx.cond(
-                GTMState.next_year_count > 0,
+                GTMState.next_year_filtered_count > 0,
                 rx.box(
                     rx.table.root(
                         summary_intervention_header(),
@@ -423,9 +564,18 @@ def next_year_intervention_table() -> rx.Component:
                     rx.vstack(
                         rx.icon("inbox", size=32, color=rx.color("gray", 8)),
                         rx.text(
-                            "No forecast data for next year",
+                            f"No data for {GTMState.next_year}",
                             size="2",
                             color=rx.color("gray", 10)
+                        ),
+                        rx.cond(
+                            GTMState.has_summary_filters,
+                            rx.text(
+                                "Try adjusting your filters",
+                                size="1",
+                                color=rx.color("gray", 9)
+                            ),
+                            rx.fragment(),
                         ),
                         spacing="2",
                         align="center",
