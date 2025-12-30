@@ -1,20 +1,24 @@
-"""Refactored GTM State using DCA Service and Shared State.
+"""Refactored GTM State with Run All Forecast functionality.
 
-This state manages Well Intervention (GTM) operations with improved
-code organization using service classes.
+This state manages Well Intervention (GTM) operations with:
+- Individual forecast for selected intervention
+- Batch forecast for ALL interventions with ratio adjustment
 
-DCA Formula: q(t) = qi * exp(-di * 12/365 * t)
+Ratio Adjustment Logic (for Done interventions):
+1. Calculate forecast using hyperbolic Arps from InterventionID parameters
+2. Find last actual production rate from HistoryProd
+3. Calculate ratio = actual_rate / forecast_rate at last history date
+4. Apply ratio to all subsequent forecast values
+
+DCA Formula: q(t) = qi / (1 + b * di * t)^(1/b) for hyperbolic
 For interventions: Qoil = OilRate * K_int * days_in_month
-
-Base Forecast (Version 0): Production decline WITHOUT intervention
-
-Updated: InterventionForecast now uses ID (from InterventionID) as primary key
 """
 import reflex as rx
 from collections import Counter
 from typing import Optional, Dict, List, Tuple
 from datetime import datetime, timedelta
 import pandas as pd
+import numpy as np
 import io
 from sqlmodel import select, delete, func, or_
 import plotly.graph_objects as go
@@ -77,6 +81,15 @@ class GTMState(SharedForecastState):
     next_year_summary: List[dict] = []
     current_year: int = datetime.now().year
     next_year: int = datetime.now().year + 1
+
+    # ========== Batch Forecast State ==========
+    is_batch_forecasting: bool = False
+    batch_forecast_progress: int = 0
+    batch_forecast_total: int = 0
+    batch_forecast_current: str = ""
+    batch_forecast_results: List[dict] = []
+    batch_forecast_errors: List[str] = []
+    batch_forecast_cancelled: bool = False
 
     # ========== Helper Methods ==========
     
@@ -340,7 +353,7 @@ class GTMState(SharedForecastState):
         self.has_base_forecast = False
         self.load_production_data()
 
-    # ========== Forecast Methods ==========
+    # ========== Individual Forecast Method ==========
 
     def run_forecast(self):
         """Run Arps decline curve forecast for intervention."""
@@ -405,7 +418,7 @@ class GTMState(SharedForecastState):
             with rx.session() as session:
                 version = self._get_next_version_fifo(session, intervention_id)
                 self._save_forecast_to_db(
-                    session, intervention_id,unique_id, result.forecast_points, version
+                    session, intervention_id, unique_id, result.forecast_points, version
                 )
             
             self.forecast_data = DCAService.forecast_to_dict_list(result.forecast_points)
@@ -434,6 +447,306 @@ class GTMState(SharedForecastState):
             import traceback
             traceback.print_exc()
             return rx.toast.error(f"Forecast failed: {str(e)}")
+
+    # ========== Batch Forecast All Interventions ==========
+
+    def cancel_batch_forecast(self):
+        """Cancel the running batch forecast."""
+        self.batch_forecast_cancelled = True
+        return rx.toast.warning("Batch forecast cancellation requested...")
+
+    def run_forecast_all(self):
+        """Run DCA forecast for ALL interventions with ratio adjustment.
+        
+        Logic:
+        1. For "Plan" interventions:
+           - Start from PlanningDate
+           - Use InitialORate, bo, Dio from InterventionID
+           - Apply hyperbolic Arps decline
+           
+        2. For "Done" interventions:
+           - Load history from HistoryProd
+           - Calculate forecast using parameters from InterventionID
+           - At last history date: calculate ratio = actual_rate / forecast_rate
+           - Apply ratio to all subsequent forecast values
+           
+        Formula: q(t) = qi / (1 + b * di * t)^(1/b) for hyperbolic
+        Adjusted: q_adj(t) = q(t) * ratio
+        """
+        if not self.forecast_end_date:
+            yield rx.toast.error("Please set forecast end date first")
+            return
+        
+        if not self._all_interventions:
+            yield rx.toast.error("No interventions loaded")
+            return
+        
+        # Initialize batch state
+        self.is_batch_forecasting = True
+        self.batch_forecast_cancelled = False
+        self.batch_forecast_progress = 0
+        self.batch_forecast_total = len(self._all_interventions)
+        self.batch_forecast_results = []
+        self.batch_forecast_errors = []
+        self.batch_forecast_current = "Initializing..."
+        
+        yield rx.toast.info(f"Starting batch forecast for {self.batch_forecast_total} interventions...")
+        
+        try:
+            end_date = datetime.strptime(self.forecast_end_date, "%Y-%m-%d")
+            five_years_ago = datetime.now() - timedelta(days=5*365)
+            
+            self._load_k_month_data()
+            
+            # Pre-load all history data for efficiency
+            with rx.session() as session:
+                # Get all unique IDs from interventions
+                unique_ids = [intv.UniqueId for intv in self._all_interventions]
+                
+                # Bulk load history data
+                history_by_unique_id = DatabaseService.bulk_load_history(
+                    session, HistoryProd, unique_ids=unique_ids, cutoff_date=five_years_ago
+                )
+            
+            success_count = 0
+            error_count = 0
+            total_qoil = 0.0
+            total_qliq = 0.0
+            
+            for i, intervention in enumerate(self._all_interventions):
+                if self.batch_forecast_cancelled:
+                    break
+                
+                self.batch_forecast_progress = i + 1
+                self.batch_forecast_current = f"Processing: {intervention.UniqueId}"
+                
+                try:
+                    result = self._run_single_intervention_forecast(
+                        intervention=intervention,
+                        end_date=end_date,
+                        history_data=history_by_unique_id.get(intervention.UniqueId, [])
+                    )
+                    
+                    if result["success"]:
+                        success_count += 1
+                        total_qoil += result["total_qoil"]
+                        total_qliq += result["total_qliq"]
+                        
+                        self.batch_forecast_results.append({
+                            "UniqueId": intervention.UniqueId,
+                            "ID": intervention.ID,
+                            "Status": intervention.Status,
+                            "Version": result["version"],
+                            "Months": result["months"],
+                            "Qoil": round(result["total_qoil"], 0),
+                            "Qliq": round(result["total_qliq"], 0),
+                            "Ratio": round(result.get("ratio", 1.0), 3)
+                        })
+                    else:
+                        error_count += 1
+                        self.batch_forecast_errors.append(f"{intervention.UniqueId}: {result['error']}")
+                        
+                except Exception as e:
+                    error_count += 1
+                    self.batch_forecast_errors.append(f"{intervention.UniqueId}: {str(e)}")
+            
+            # Finish batch processing
+            self.is_batch_forecasting = False
+            self.batch_forecast_current = "Complete"
+            
+            # Reload summary tables
+            self.load_forecast_summary_tables()
+            
+            if self.batch_forecast_cancelled:
+                yield rx.toast.warning(
+                    f"Batch forecast cancelled. Processed {success_count} of {len(self._all_interventions)} interventions."
+                )
+            else:
+                yield rx.toast.success(
+                    f"Batch complete: {success_count} success, {error_count} errors. "
+                    f"Total Qoil={total_qoil/1000:.1f} thousand tons"
+                )
+            
+        except Exception as e:
+            print(f"Batch forecast error: {e}")
+            import traceback
+            traceback.print_exc()
+            self.is_batch_forecasting = False
+            yield rx.toast.error(f"Batch forecast failed: {str(e)}")
+
+    def _run_single_intervention_forecast(
+        self, 
+        intervention: InterventionID, 
+        end_date: datetime,
+        history_data: List[Dict]
+    ) -> Dict:
+        """Run forecast for a single intervention with ratio adjustment.
+        
+        Args:
+            intervention: InterventionID record
+            end_date: Forecast end date
+            history_data: Pre-loaded history data for this intervention
+            
+        Returns:
+            Dict with keys: success, error, version, months, total_qoil, total_qliq, ratio
+        """
+        from ..utils.dca_utils import (
+            arps_decline,
+            generate_forecast_dates,
+            calculate_water_cut,
+            ForecastPoint
+        )
+        
+        intervention_id = intervention.ID
+        unique_id = intervention.UniqueId
+        
+        # Get parameters from InterventionID
+        qi_oil = intervention.InitialORate if intervention.InitialORate else 0.0
+        b_oil = intervention.bo if intervention.bo else 0.0
+        di_oil = intervention.Dio if intervention.Dio else 0.0
+        qi_liq = intervention.InitialLRate if intervention.InitialLRate else 0.0
+        b_liq = intervention.bl if intervention.bl else 0.0
+        di_liq = intervention.Dil if intervention.Dil else 0.0
+        
+        # Validate parameters
+        if qi_oil <= 0:
+            return {"success": False, "error": "Invalid InitialORate (must be > 0)"}
+        if di_oil <= 0:
+            return {"success": False, "error": "Invalid Dio (must be > 0)"}
+        
+        ratio_oil = 1.0
+        ratio_liq = 1.0
+        
+        # Determine start date and ratio based on status
+        if intervention.Status == "Done":
+            # For Done interventions: use history to calculate ratio
+            if not history_data:
+                return {"success": False, "error": "No history data for Done intervention"}
+            
+            # Sort history by date
+            sorted_history = sorted(history_data, key=lambda x: x["Date"])
+            last_history = sorted_history[-1]
+            
+            # Get last actual rates (replace None/null with 0)
+            last_actual_oil = last_history["OilRate"] if last_history["OilRate"] else 0.0
+            last_actual_liq = last_history["LiqRate"] if last_history["LiqRate"] else 0.0
+            
+            # Get last history date
+            last_date = last_history["Date"]
+            if isinstance(last_date, str):
+                last_date = datetime.strptime(last_date[:10], "%Y-%m-%d")
+            
+            # Calculate elapsed days from intervention planning date
+            planning_date = datetime.strptime(intervention.PlanningDate[:10], "%Y-%m-%d")
+            elapsed_days = (last_date - planning_date).days
+            
+            if elapsed_days <= 0:
+                # History is before planning date, use planning date
+                start_date = planning_date
+                ratio_oil = 1.0
+                ratio_liq = 1.0
+            else:
+                # Calculate theoretical forecast rate at last history date
+                elapsed_array = np.array([elapsed_days])
+                
+                forecast_oil_at_last = arps_decline(qi_oil, di_oil, b_oil, elapsed_array)[0]
+                forecast_liq_at_last = arps_decline(qi_liq, di_liq, b_liq, elapsed_array)[0]
+                
+                # Calculate ratio = actual / forecast
+                if forecast_oil_at_last > 0:
+                    ratio_oil = last_actual_oil / forecast_oil_at_last
+                else:
+                    ratio_oil = 1.0
+                    
+                if forecast_liq_at_last > 0:
+                    ratio_liq = last_actual_liq / forecast_liq_at_last
+                else:
+                    ratio_liq = 1.0
+                
+                # Start forecast from last history date
+                start_date = last_date
+                
+        else:
+            # For Plan interventions: start from PlanningDate
+            start_date = datetime.strptime(intervention.PlanningDate[:10], "%Y-%m-%d")
+        
+        # Validate date range
+        if end_date <= start_date:
+            return {"success": False, "error": f"End date must be after {start_date.strftime('%Y-%m-%d')}"}
+        
+        # Generate forecast dates
+        date_range, elapsed_days, days_in_month, month_indices = generate_forecast_dates(
+            start_date, end_date
+        )
+        
+        if len(date_range) == 0:
+            return {"success": False, "error": "Invalid date range"}
+        
+        # Calculate elapsed days from planning date (not from start_date)
+        planning_date = datetime.strptime(intervention.PlanningDate[:10], "%Y-%m-%d")
+        elapsed_from_planning = np.array([(d - planning_date).days for d in date_range])
+        
+        # Get K factors for each month
+        k_int_array = np.array([
+            self.k_month_data.get(m, {}).get("K_int", 1.0) 
+            for m in month_indices
+        ])
+        
+        # Calculate rates using hyperbolic Arps decline
+        oil_rates_raw = arps_decline(qi_oil, di_oil, b_oil, elapsed_from_planning)
+        liq_rates_raw = arps_decline(qi_liq, di_liq, b_liq, elapsed_from_planning)
+        
+        # Apply ratio adjustment
+        oil_rates = oil_rates_raw * ratio_oil
+        liq_rates = liq_rates_raw * ratio_liq
+        
+        # Ensure rates are non-negative
+        oil_rates = np.maximum(0.0, oil_rates)
+        liq_rates = np.maximum(0.0, liq_rates)
+        
+        # Calculate cumulative production using K_int
+        q_oil_array = oil_rates * k_int_array * days_in_month
+        q_liq_array = liq_rates * k_int_array * days_in_month
+        
+        # Build forecast points
+        forecast_points = []
+        for i, date in enumerate(date_range):
+            wc = calculate_water_cut(oil_rates[i], liq_rates[i])
+            
+            forecast_points.append(ForecastPoint(
+                date=date.to_pydatetime() if hasattr(date, 'to_pydatetime') else date,
+                days_in_month=int(days_in_month[i]),
+                oil_rate=round(float(oil_rates[i]), 2),
+                liq_rate=round(float(liq_rates[i]), 2),
+                q_oil=round(float(q_oil_array[i]), 2),
+                q_liq=round(float(q_liq_array[i]), 2),
+                wc=round(wc, 2)
+            ))
+        
+        # Calculate totals
+        total_qoil = sum(fp.q_oil for fp in forecast_points)
+        total_qliq = sum(fp.q_liq for fp in forecast_points)
+        
+        # Save to database
+        try:
+            with rx.session() as session:
+                version = self._get_next_version_fifo(session, intervention_id)
+                self._save_forecast_to_db(
+                    session, intervention_id, unique_id, forecast_points, version
+                )
+            
+            return {
+                "success": True,
+                "error": "",
+                "version": version,
+                "months": len(forecast_points),
+                "total_qoil": total_qoil,
+                "total_qliq": total_qliq,
+                "ratio": ratio_oil
+            }
+            
+        except Exception as e:
+            return {"success": False, "error": f"Save failed: {str(e)}"}
 
     def _get_next_version_fifo(self, session, intervention_id: int) -> int:
         """Get next forecast version using FIFO logic with ID."""
@@ -468,7 +781,7 @@ class GTMState(SharedForecastState):
         
         return oldest_version
 
-    def _save_forecast_to_db(self, session, intervention_id: int,UniqueId:str, forecast_points, version: int):
+    def _save_forecast_to_db(self, session, intervention_id: int, unique_id: str, forecast_points, version: int):
         """Save forecast points to database using ID."""
         from ..utils.dca_utils import ForecastPoint
         
@@ -486,7 +799,7 @@ class GTMState(SharedForecastState):
         for fp in forecast_points:
             record = InterventionForecast(
                 ID=intervention_id,
-                UniqueId=UniqueId,
+                UniqueId=unique_id,
                 Date=fp.date,
                 Version=version,
                 DataType="Forecast",
@@ -538,8 +851,6 @@ class GTMState(SharedForecastState):
         """Set current year and return it."""
         self.current_year = int(year)
         return self.current_year
-
-    # gtm_app/states/gtm_state.py
 
     def load_forecast_summary_tables(self):
         """Load forecast summary data for current year and next year.
@@ -625,6 +936,9 @@ class GTMState(SharedForecastState):
                 for intv_id, details in intervention_dict_2025.items():
                     uid = details["UniqueId"]
                     
+                    if intv_id not in forecast_by_id:
+                        continue
+                    
                     versions = forecast_by_id[intv_id]
                     latest_version = max(versions.keys())
                     records = versions[latest_version]
@@ -657,11 +971,11 @@ class GTMState(SharedForecastState):
                     
                     total_qoil = 0.0
                     for i, name in enumerate(month_names, 1):
-                        row[name] = monthly_qoil[i]
+                        row[name] = round(monthly_qoil[i], 1)
                         current_year_totals[i] += monthly_qoil[i]
                         total_qoil += monthly_qoil[i]
                     
-                    row["Total"] = total_qoil  # in thousands
+                    row["Total"] = total_qoil   # in thousands
                     
                     # Include row even if some months have 0 (intervention might start mid-year)
                     current_year_data.append(row)
@@ -681,7 +995,7 @@ class GTMState(SharedForecastState):
                     }
                     for i, name in enumerate(month_names, 1):
                         total_row[name] = current_year_totals[i]
-                    total_row["Total"] = sum(current_year_totals.values())
+                    total_row["Total"] = sum(current_year_totals.values()) 
                     current_year_data.append(total_row)
                 
                 # Process 2026 interventions
@@ -693,13 +1007,10 @@ class GTMState(SharedForecastState):
                     
                     if intv_id not in forecast_by_id:
                         continue
+                    
                     versions = forecast_by_id[intv_id]
-                    if not versions:
-                        continue
                     latest_version = max(versions.keys())
                     records = versions[latest_version]
-                    
-        
                     
                     # Monthly Qoil for next year only
                     monthly_qoil = {m: 0.0 for m in range(1, 13)}
@@ -729,15 +1040,14 @@ class GTMState(SharedForecastState):
                     
                     total_qoil = 0.0
                     for i, name in enumerate(month_names, 1):
-                        row[name] = monthly_qoil[i]
+                        row[name] = round(monthly_qoil[i], 1)
                         next_year_totals[i] += monthly_qoil[i]
                         total_qoil += monthly_qoil[i]
                     
-                    row["Total"] = total_qoil
+                    row["Total"] = total_qoil / 1000
                     
                     # Include row even if some months have 0
                     next_year_data.append(row)
-                    #print(f"DEBUG: Added 2026 row for {uid}, Total={row['Total']}")
                 
                 # Add total row for 2026
                 if next_year_data:
@@ -753,7 +1063,7 @@ class GTMState(SharedForecastState):
                         "GTMYear": next_year,
                     }
                     for i, name in enumerate(month_names, 1):
-                        total_row[name] = next_year_totals[i]
+                        total_row[name] =next_year_totals[i]
                     total_row["Total"] = sum(next_year_totals.values()) 
                     next_year_data.append(total_row)
                 
@@ -782,6 +1092,39 @@ class GTMState(SharedForecastState):
         """Download next year summary as Excel file."""
         return self._download_summary_excel(self.next_year_summary, self.next_year)
 
+    def download_both_years_excel(self):
+        """Download both years summary as single Excel file with multiple sheets."""
+        if not self.current_year_summary and not self.next_year_summary:
+            return rx.toast.error("No data available")
+        
+        try:
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                columns_order = [
+                    "UniqueId", "Field", "Platform", "Reservoir", "Type", "Category",
+                    "Status", "Date", "GTMYear", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Total"
+                ]
+                
+                if self.current_year_summary:
+                    df_current = pd.DataFrame(self.current_year_summary)
+                    df_current = df_current[columns_order]
+                    df_current.to_excel(writer, sheet_name=f'Qoil_{self.current_year}', index=False)
+                
+                if self.next_year_summary:
+                    df_next = pd.DataFrame(self.next_year_summary)
+                    df_next = df_next[columns_order]
+                    df_next.to_excel(writer, sheet_name=f'Qoil_{self.next_year}', index=False)
+            
+            output.seek(0)
+            return rx.download(
+                data=output.getvalue(),
+                filename=f"Intervention_Qoil_Forecast_{self.current_year}_{self.next_year}.xlsx",
+            )
+            
+        except Exception as e:
+            return rx.toast.error(f"Failed to download Excel: {str(e)}")
+
     def _download_summary_excel(self, data: List[dict], year: int):
         """Download summary data as Excel file."""
         if not data:
@@ -791,7 +1134,7 @@ class GTMState(SharedForecastState):
             df = pd.DataFrame(data)
             columns_order = [
                 "UniqueId", "Field", "Platform", "Reservoir", "Type", "Category",
-                "Status", "Date", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Status", "Date", "GTMYear", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Total"
             ]
             df = df[columns_order]
@@ -831,7 +1174,7 @@ class GTMState(SharedForecastState):
             form_data.setdefault("Category", "")
             form_data.setdefault("Describe", "")
             form_data["InterventionYear"] = datetime.strptime(form_data["PlanningDate"], "%Y-%m-%d").year
-            print(f"Debug : {form_data["PlanningDate"]}")
+            
             with rx.session() as session:
                 new_gtm = InterventionID(**form_data)
                 session.add(new_gtm)
@@ -842,6 +1185,7 @@ class GTMState(SharedForecastState):
             
         except Exception as e:
             return rx.toast.error(f"Failed to save GTM: {str(e)}")
+
 
     async def handle_excel_upload(self, files: List[rx.UploadFile]):
         """Handle Excel file upload for interventions with validation."""
@@ -939,7 +1283,7 @@ class GTMState(SharedForecastState):
                     if value is not None and str(value).strip():
                         setattr(gtm_to_update, field, str(value).strip())
                 
-                setattr(gtm_to_update,"InterventionYear",datetime.strptime(form_data.get("PlanningDate"),"%Y-%m-%d").year)
+                setattr(gtm_to_update, "InterventionYear", datetime.strptime(form_data.get("PlanningDate"), "%Y-%m-%d").year)
                 numeric_fields = ["InitialORate", "bo", "Dio", "InitialLRate", "bl", "Dil"]
                 for field in numeric_fields:
                     value = form_data.get(field)
@@ -1049,16 +1393,60 @@ class GTMState(SharedForecastState):
     
     @rx.var
     def current_year_total_qoil(self) -> float:
-        return sum(row.get("Total", 0) for row in self.current_year_summary)
+        # Exclude TOTAL row from sum
+        return sum(row.get("Total", 0) for row in self.current_year_summary if row.get("UniqueId") != "TOTAL")
     
     @rx.var
     def next_year_total_qoil(self) -> float:
-        return sum(row.get("Total", 0) for row in self.next_year_summary)
+        # Exclude TOTAL row from sum
+        return sum(row.get("Total", 0) for row in self.next_year_summary if row.get("UniqueId") != "TOTAL")
     
     @rx.var
     def current_year_count(self) -> int:
-        return len(self.current_year_summary)
+        # Exclude TOTAL row from count
+        return len([r for r in self.current_year_summary if r.get("UniqueId") != "TOTAL"])
     
     @rx.var
     def next_year_count(self) -> int:
-        return len(self.next_year_summary)
+        # Exclude TOTAL row from count
+        return len([r for r in self.next_year_summary if r.get("UniqueId") != "TOTAL"])
+
+    # ========== Batch Forecast Computed Properties ==========
+    
+    @rx.var
+    def batch_progress_percent(self) -> int:
+        if self.batch_forecast_total == 0:
+            return 0
+        return int((self.batch_forecast_progress / self.batch_forecast_total) * 100)
+    
+    @rx.var
+    def batch_progress_display(self) -> str:
+        return f"{self.batch_forecast_progress}/{self.batch_forecast_total}"
+    
+    @rx.var
+    def batch_success_count(self) -> int:
+        return len(self.batch_forecast_results)
+    
+    @rx.var
+    def batch_error_count(self) -> int:
+        return len(self.batch_forecast_errors)
+    
+    @rx.var
+    def batch_total_qoil(self) -> float:
+        return sum(r.get("Qoil", 0) for r in self.batch_forecast_results)
+    
+    @rx.var
+    def batch_total_qliq(self) -> float:
+        return sum(r.get("Qliq", 0) for r in self.batch_forecast_results)
+    
+    @rx.var
+    def batch_total_qoil_display(self) -> str:
+        return f"{int(self.batch_total_qoil/1000)}"
+    
+    @rx.var
+    def batch_total_qliq_display(self) -> str:
+        return f"{int(self.batch_total_qliq/1000)}"
+    
+    @rx.var
+    def batch_errors_display(self) -> List[str]:
+        return self.batch_forecast_errors[:10]
