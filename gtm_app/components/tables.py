@@ -214,47 +214,15 @@ def summary_year_selector() -> rx.Component:
 
 
 def summary_search_filters() -> rx.Component:
-    """Search filters for summary table columns."""
+    """Single search input for summary table - searches all columns."""
     return rx.hstack(
         rx.input(
             rx.input.slot(rx.icon("search", size=14)),
-            placeholder="Field...",
+            placeholder="Search by ID, Field, Platform, Reservoir, Type, Category, Status...",
             size="1",
-            width="100px",
-            value=GTMState.summary_search_field,
-            on_change=GTMState.set_summary_search_field,
-            debounce_timeout=300,
-        ),
-        rx.input(
-            placeholder="Platform...",
-            size="1",
-            width="100px",
-            value=GTMState.summary_search_platform,
-            on_change=GTMState.set_summary_search_platform,
-            debounce_timeout=300,
-        ),
-        rx.input(
-            placeholder="Reservoir...",
-            size="1",
-            width="100px",
-            value=GTMState.summary_search_reservoir,
-            on_change=GTMState.set_summary_search_reservoir,
-            debounce_timeout=300,
-        ),
-        rx.input(
-            placeholder="Type...",
-            size="1",
-            width="100px",
-            value=GTMState.summary_search_type,
-            on_change=GTMState.set_summary_search_type,
-            debounce_timeout=300,
-        ),
-        rx.input(
-            placeholder="Category...",
-            size="1",
-            width="100px",
-            value=GTMState.summary_search_category,
-            on_change=GTMState.set_summary_search_category,
+            width="400px",
+            value=GTMState.summary_search_text,
+            on_change=GTMState.set_summary_search_text,
             debounce_timeout=300,
         ),
         rx.cond(
@@ -271,18 +239,19 @@ def summary_search_filters() -> rx.Component:
         ),
         spacing="2",
         align="center",
-        wrap="wrap",
     )
 
 
 def summary_controls_bar() -> rx.Component:
-    """Combined control bar with phase, year, and filters."""
+    """Combined control bar with phase, year, and unified search."""
     return rx.card(
         rx.vstack(
             rx.hstack(
                 summary_phase_selector(),
                 rx.divider(orientation="vertical", size="2"),
                 summary_year_selector(),
+                rx.divider(orientation="vertical", size="2"),
+                summary_search_filters(),
                 rx.spacer(),
                 rx.button(
                     rx.icon("file-spreadsheet", size=16),
@@ -294,13 +263,7 @@ def summary_controls_bar() -> rx.Component:
                 ),
                 width="100%",
                 align="center",
-            ),
-            rx.divider(),
-            rx.hstack(
-                rx.text("Filters:", size="1", weight="bold", color=rx.color("gray", 10)),
-                summary_search_filters(),
-                width="100%",
-                align="center",
+                wrap="wrap",
             ),
             width="100%",
             spacing="2",
