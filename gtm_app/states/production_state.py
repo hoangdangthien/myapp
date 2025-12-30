@@ -1,17 +1,24 @@
-"""Refactored Production State with Dip/Dir support.
+"""Updated Production State with Intervention-aware Forecast Logic.
 
 This state manages Production monitoring and forecasting with:
 - Dip: Platform-level decline adjustment
 - Dir: Reservoir+Field level decline adjustment
-- Effective Di = Do * (1 + Dip) * (1 + Dir)
+- Intervention detection and handling
+
+Forecast Logic:
+1. No intervention in current year → Standard exponential DCA
+2. One Done intervention → Use intervention parameters
+3. One Plan intervention → Base forecast + replace after intervention date
+4. Multiple interventions → Use last intervention, replace after first Plan date
 
 DCA Formula: q(t) = qi * exp(-Di_eff * 12/365 * t)
-Cumulative: Qoil = OilRate * K_oil * days_in_month
+Effective Decline: Di_eff = Do * (1 + Dip) * (1 + Dir)
 """
 import reflex as rx
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 from datetime import datetime, timedelta
 from sqlmodel import select, delete, func, desc, or_
+import numpy as np
 
 from ..models import (
     CompletionID,
@@ -27,10 +34,17 @@ from ..models import (
 from ..services.dca_service import DCAService, ForecastConfig, ForecastResult
 from ..services.database_service import DatabaseService
 from .shared_state import SharedForecastState
+from ..utils.dca_utils import (
+    arps_exponential,
+    arps_decline,
+    generate_forecast_dates,
+    calculate_water_cut,
+    ForecastPoint,
+)
 
 
 class ProductionState(SharedForecastState):
-    """State for Production monitoring and forecasting with Dip/Dir support."""
+    """State for Production monitoring and forecasting with intervention-aware logic."""
     
     # CompletionID data
     completions: List[CompletionID] = []
@@ -50,12 +64,14 @@ class ProductionState(SharedForecastState):
     b_liq: float = 0.0
     
     # Decline adjustment parameters
-    dip: float = 0.0  # Platform-level adjustment
-    dir: float = 0.0  # Reservoir+Field level adjustment
+    dip: float = 0.0
+    dir: float = 0.0
     
-    # Intervention status
+    # Intervention status for selected completion
     has_planned_intervention: bool = False
+    has_done_intervention: bool = False
     intervention_info: str = ""
+    interventions_this_year: List[InterventionID] = []
     
     # Search/filter
     search_value: str = ""
@@ -65,7 +81,7 @@ class ProductionState(SharedForecastState):
     is_loading_completions: bool = False
     is_loading_production: bool = False
     
-    # ========== Batch Forecast State ==========
+    # Batch Forecast State
     is_batch_forecasting: bool = False
     batch_forecast_progress: int = 0
     batch_forecast_total: int = 0
@@ -73,6 +89,8 @@ class ProductionState(SharedForecastState):
     batch_forecast_results: List[dict] = []
     batch_forecast_errors: List[str] = []
     batch_forecast_cancelled: bool = False
+
+    # ========== Load Methods ==========
 
     def load_completions(self):
         """Load all completions from CompletionID table."""
@@ -87,7 +105,6 @@ class ProductionState(SharedForecastState):
             
             if self.available_ids and not self.selected_id:
                 self.selected_id = self.available_ids[0]
-                #self.load_production_data_background()
                 
         except Exception as e:
             print(f"Error loading completions: {e}")
@@ -144,7 +161,6 @@ class ProductionState(SharedForecastState):
                 if not completion_to_update:
                     return rx.toast.error(f"Completion '{unique_id}' not found")
                 
-                # Update all decline parameters
                 for field in ["Do", "Dl", "Dip", "Dir"]:
                     value = form_data.get(field)
                     if value is not None and str(value).strip() != "":
@@ -254,6 +270,7 @@ class ProductionState(SharedForecastState):
         self.current_forecast_version = 0
         self.history_prod = []
         self.chart_data = []
+        self.interventions_this_year = []
         
         self.selected_completion = next(
             (c for c in self._all_completions if c.UniqueId == unique_id), 
@@ -284,31 +301,43 @@ class ProductionState(SharedForecastState):
             
             history_data = []
             forecast_versions = []
-            has_intervention = False
-            intervention_text = ""
+            interventions_current_year = []
+            current_year = datetime.now().year
             
             with rx.session() as session:
+                # Load history data
                 history_data = DCAService.load_history_data(session, unique_id, years=5)
                 
-                intervention = session.exec(
+                # Load interventions for this UniqueId in current year
+                interventions_current_year = session.exec(
                     select(InterventionID).where(
                         InterventionID.UniqueId == unique_id,
-                        InterventionID.Status == "Plan"
-                    )
-                ).first()
+                        InterventionID.InterventionYear == current_year
+                    ).order_by(InterventionID.PlanningDate)
+                ).all()
                 
-                has_intervention = intervention is not None
-                if intervention:
-                    intervention_text = f"{intervention.TypeGTM} planned on {intervention.PlanningDate}"
-                
+                # Get forecast versions
                 forecast_versions = DatabaseService.get_available_versions(
                     session, ProductionForecast, unique_id, min_version=1
                 )
             
+            # Analyze interventions
+            has_plan = any(i.Status == "Plan" for i in interventions_current_year)
+            has_done = any(i.Status == "Done" for i in interventions_current_year)
+            
+            # Build intervention info string
+            intervention_text = ""
+            if interventions_current_year:
+                plan_count = sum(1 for i in interventions_current_year if i.Status == "Plan")
+                done_count = sum(1 for i in interventions_current_year if i.Status == "Done")
+                intervention_text = f"{done_count} Done, {plan_count} Plan in {current_year}"
+            
             async with self:
                 self.history_prod = history_data
-                self.has_planned_intervention = has_intervention
+                self.has_planned_intervention = has_plan
+                self.has_done_intervention = has_done
                 self.intervention_info = intervention_text
+                self.interventions_this_year = interventions_current_year
                 self.available_forecast_versions = forecast_versions
                 
                 if self.history_prod:
@@ -367,8 +396,222 @@ class ProductionState(SharedForecastState):
             version = int(version_str[1:])
             self.set_forecast_version(version)
 
+    # ========== Intervention-Aware Forecast Logic ==========
+
+    def _get_interventions_for_completion(self, session, unique_id: str, year: int) -> List[InterventionID]:
+        """Get all interventions for a completion in a specific year."""
+        return session.exec(
+            select(InterventionID).where(
+                InterventionID.UniqueId == unique_id,
+                InterventionID.InterventionYear == year
+            ).order_by(InterventionID.PlanningDate)
+        ).all()
+
+    def _run_exponential_forecast(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        qi_oil: float,
+        qi_liq: float,
+        di_oil_eff: float,
+        di_liq_eff: float
+    ) -> List[ForecastPoint]:
+        """Run standard exponential DCA forecast."""
+        date_range, elapsed_days, days_in_month, month_indices = generate_forecast_dates(
+            start_date, end_date
+        )
+        
+        if len(date_range) == 0:
+            return []
+        
+        # Get K factors
+        k_oil_array = np.array([
+            self.k_month_data.get(m, {}).get("K_oil", 1.0) 
+            for m in month_indices
+        ])
+        k_liq_array = np.array([
+            self.k_month_data.get(m, {}).get("K_liq", 1.0) 
+            for m in month_indices
+        ])
+        
+        # Calculate rates using exponential decline
+        oil_rates = arps_exponential(qi_oil, di_oil_eff, elapsed_days)
+        liq_rates = arps_exponential(qi_liq, di_liq_eff, elapsed_days)
+        
+        # Ensure non-negative
+        oil_rates = np.maximum(0.0, oil_rates)
+        liq_rates = np.maximum(0.0, liq_rates)
+        
+        # Calculate cumulative
+        q_oil_array = oil_rates * k_oil_array * days_in_month
+        q_liq_array = liq_rates * k_liq_array * days_in_month
+        
+        forecast_points = []
+        for i, date in enumerate(date_range):
+            wc = calculate_water_cut(oil_rates[i], liq_rates[i])
+            forecast_points.append(ForecastPoint(
+                date=date.to_pydatetime() if hasattr(date, 'to_pydatetime') else date,
+                days_in_month=int(days_in_month[i]),
+                oil_rate=round(float(oil_rates[i]), 2),
+                liq_rate=round(float(liq_rates[i]), 2),
+                q_oil=round(float(q_oil_array[i]), 2),
+                q_liq=round(float(q_liq_array[i]), 2),
+                wc=round(wc, 2)
+            ))
+        
+        return forecast_points
+
+    def _run_intervention_forecast(
+        self,
+        intervention: InterventionID,
+        start_date: datetime,
+        end_date: datetime,
+        last_actual_oil: float = None,
+        last_actual_liq: float = None
+    ) -> List[ForecastPoint]:
+        """Run hyperbolic DCA forecast using intervention parameters."""
+        qi_oil = intervention.InitialORate if intervention.InitialORate else 0.0
+        b_oil = intervention.bo if intervention.bo else 0.0
+        di_oil = intervention.Dio if intervention.Dio else 0.0
+        qi_liq = intervention.InitialLRate if intervention.InitialLRate else 0.0
+        b_liq = intervention.bl if intervention.bl else 0.0
+        di_liq = intervention.Dil if intervention.Dil else 0.0
+        
+        date_range, elapsed_days, days_in_month, month_indices = generate_forecast_dates(
+            start_date, end_date
+        )
+        
+        if len(date_range) == 0:
+            return []
+        
+        # Get K_int factors
+        k_int_array = np.array([
+            self.k_month_data.get(m, {}).get("K_int", 1.0) 
+            for m in month_indices
+        ])
+        
+        # Calculate rates using Arps decline (hyperbolic if b > 0)
+        oil_rates = arps_decline(qi_oil, di_oil, b_oil, elapsed_days)
+        liq_rates = arps_decline(qi_liq, di_liq, b_liq, elapsed_days)
+        
+        # Apply ratio adjustment if actual rates provided
+        ratio_oil = 1.0
+        ratio_liq = 1.0
+        if last_actual_oil is not None and oil_rates[0] > 0:
+            ratio_oil = last_actual_oil / oil_rates[0]
+        if last_actual_liq is not None and liq_rates[0] > 0:
+            ratio_liq = last_actual_liq / liq_rates[0]
+        
+        oil_rates = oil_rates * ratio_oil
+        liq_rates = liq_rates * ratio_liq
+        
+        # Ensure non-negative
+        oil_rates = np.maximum(0.0, oil_rates)
+        liq_rates = np.maximum(0.0, liq_rates)
+        
+        # Calculate cumulative using K_int
+        q_oil_array = oil_rates * k_int_array * days_in_month
+        q_liq_array = liq_rates * k_int_array * days_in_month
+        
+        forecast_points = []
+        for i, date in enumerate(date_range):
+            wc = calculate_water_cut(oil_rates[i], liq_rates[i])
+            forecast_points.append(ForecastPoint(
+                date=date.to_pydatetime() if hasattr(date, 'to_pydatetime') else date,
+                days_in_month=int(days_in_month[i]),
+                oil_rate=round(float(oil_rates[i]), 2),
+                liq_rate=round(float(liq_rates[i]), 2),
+                q_oil=round(float(q_oil_array[i]), 2),
+                q_liq=round(float(q_liq_array[i]), 2),
+                wc=round(wc, 2)
+            ))
+        
+        return forecast_points
+
+    def _merge_forecasts(
+        self,
+        base_forecast: List[ForecastPoint],
+        intervention_forecast: List[ForecastPoint],
+        intervention_date: datetime
+    ) -> List[ForecastPoint]:
+        """Merge base forecast with intervention forecast.
+        
+        Returns base forecast values before intervention date,
+        and intervention forecast values from intervention date onwards.
+        """
+        merged = []
+        
+        # Convert intervention_date to date only for comparison
+        intv_date = intervention_date.date() if isinstance(intervention_date, datetime) else intervention_date
+        
+        # Add base forecast points before intervention date
+        for fp in base_forecast:
+            fp_date = fp.date.date() if isinstance(fp.date, datetime) else fp.date
+            if fp_date < intv_date:
+                merged.append(fp)
+        
+        # Add intervention forecast points from intervention date onwards
+        for fp in intervention_forecast:
+            fp_date = fp.date.date() if isinstance(fp.date, datetime) else fp.date
+            if fp_date >= intv_date:
+                merged.append(fp)
+        
+        # Sort by date
+        merged.sort(key=lambda x: x.date)
+        
+        return merged
+
+    def _save_to_intervention_forecast(
+        self,
+        session,
+        intervention: InterventionID,
+        forecast_points: List[ForecastPoint],
+        version: int
+    ):
+        """Save forecast to InterventionForecast table."""
+        created_at = datetime.now()
+        
+        # Delete existing records for this version
+        session.exec(
+            delete(InterventionForecast).where(
+                InterventionForecast.ID == intervention.ID,
+                InterventionForecast.Version == version
+            )
+        )
+        session.commit()
+        
+        for fp in forecast_points:
+            record = InterventionForecast(
+                ID=intervention.ID,
+                UniqueId=intervention.UniqueId,
+                Date=fp.date,
+                Version=version,
+                DataType="Forecast",
+                OilRate=fp.oil_rate,
+                LiqRate=fp.liq_rate,
+                Qoil=fp.q_oil,
+                Qliq=fp.q_liq,
+                WC=fp.wc,
+                CreatedAt=created_at
+            )
+            session.add(record)
+        
+        session.commit()
+
     def run_forecast(self):
-        """Run DCA forecast using service with Dip/Dir adjustments."""
+        """Run DCA forecast with intervention-aware logic.
+        
+        Logic:
+        1. No intervention in current year → Standard exponential DCA
+        2. One Done intervention only → Use intervention parameters
+        3. One Plan intervention only → 
+           - Create base forecast (exponential) → save to InterventionForecast v0
+           - Replace values after intervention date with intervention forecast → save to ProductionForecast
+        4. Multiple interventions (Done + Plan) →
+           - Use last intervention parameters
+           - Save to InterventionForecast as base for next Plan
+           - Replace values after first Plan intervention date → save to ProductionForecast
+        """
         if not self.selected_completion or not self.forecast_end_date:
             return rx.toast.error("Please select a completion and set forecast end date")
         
@@ -380,7 +623,9 @@ class ProductionState(SharedForecastState):
         
         try:
             end_date = datetime.strptime(self.forecast_end_date, "%Y-%m-%d")
+            current_year = datetime.now().year
             
+            # Get last production record
             sorted_history = sorted(self.history_prod, key=lambda x: x["Date"])
             last_prod = sorted_history[-1]
             
@@ -394,29 +639,153 @@ class ProductionState(SharedForecastState):
             
             self._load_k_month_data()
             
-            # Create forecast config with Dip/Dir
-            config = ForecastConfig(
-                qi_oil=self.qi_oil,
-                di_oil=self.dio,
-                b_oil=self.b_oil,
-                qi_liq=self.qi_liq,
-                di_liq=self.dil,
-                b_liq=self.b_liq,
-                start_date=start_date,
-                end_date=end_date,
-                use_exponential=self.use_exponential_dca,
-                k_month_data=self.k_month_data,
-                dip=self.dip,
-                dir=self.dir
-            )
+            # Calculate effective decline rates
+            di_oil_eff = self.dio * (1 + self.dip) * (1 + self.dir)
+            di_liq_eff = (self.dil if self.dil > 0 else self.dio) * (1 + self.dip) * (1 + self.dir)
             
-            # Run forecast using service
-            result = DCAService.run_production_forecast(config)
+            # Get interventions for current year
+            with rx.session() as session:
+                interventions = self._get_interventions_for_completion(
+                    session, self.selected_id, current_year
+                )
             
-            if not result.is_success:
-                return rx.toast.error(result.error or "Forecast failed")
+            # Separate by status
+            done_interventions = [i for i in interventions if i.Status == "Done"]
+            plan_interventions = [i for i in interventions if i.Status == "Plan"]
             
-            # Save to database
+            final_forecast_points = []
+            message_parts = []
+            
+            # ========== CASE 1: No intervention in current year ==========
+            if not interventions:
+                final_forecast_points = self._run_exponential_forecast(
+                    start_date=start_date,
+                    end_date=end_date,
+                    qi_oil=self.qi_oil,
+                    qi_liq=self.qi_liq,
+                    di_oil_eff=di_oil_eff,
+                    di_liq_eff=di_liq_eff
+                )
+                message_parts.append("Standard exponential DCA (no intervention)")
+            
+            # ========== CASE 2: Only Done interventions ==========
+            elif done_interventions and not plan_interventions:
+                # Use the last Done intervention parameters
+                last_done = done_interventions[-1]
+                
+                final_forecast_points = self._run_intervention_forecast(
+                    intervention=last_done,
+                    start_date=start_date,
+                    end_date=end_date,
+                    last_actual_oil=self.qi_oil,
+                    last_actual_liq=self.qi_liq
+                )
+                message_parts.append(f"Using Done intervention ({last_done.TypeGTM}) parameters")
+            
+            # ========== CASE 3: Only Plan intervention ==========
+            elif plan_interventions and not done_interventions:
+                first_plan = plan_interventions[0]
+                plan_date = datetime.strptime(first_plan.PlanningDate[:10], "%Y-%m-%d")
+                
+                # Step 1: Create base forecast (exponential from last rate to end date)
+                base_forecast = self._run_exponential_forecast(
+                    start_date=start_date,
+                    end_date=end_date,
+                    qi_oil=self.qi_oil,
+                    qi_liq=self.qi_liq,
+                    di_oil_eff=di_oil_eff,
+                    di_liq_eff=di_liq_eff
+                )
+                
+                # Save base forecast to InterventionForecast v0
+                with rx.session() as session:
+                    self._save_to_intervention_forecast(
+                        session, first_plan, base_forecast, version=0
+                    )
+                message_parts.append("Base forecast saved to InterventionForecast v0")
+                
+                # Step 2: Create intervention forecast from planning date
+                intervention_forecast = self._run_intervention_forecast(
+                    intervention=first_plan,
+                    start_date=plan_date,
+                    end_date=end_date
+                )
+                
+                # Step 3: Merge - use base before intervention date, intervention after
+                final_forecast_points = self._merge_forecasts(
+                    base_forecast=base_forecast,
+                    intervention_forecast=intervention_forecast,
+                    intervention_date=plan_date
+                )
+                message_parts.append(f"Merged with Plan intervention ({first_plan.TypeGTM}) from {first_plan.PlanningDate}")
+            
+            # ========== CASE 4: Both Done and Plan interventions ==========
+            else:
+                # Use last intervention (could be Done or Plan based on date)
+                all_sorted = sorted(interventions, key=lambda x: x.PlanningDate)
+                last_intervention = all_sorted[-1]
+                first_plan = plan_interventions[0] if plan_interventions else None
+                
+                # Create forecast using last intervention parameters
+                last_intv_date = datetime.strptime(last_intervention.PlanningDate[:10], "%Y-%m-%d")
+                
+                # If last is Done, start from last history date
+                # If last is Plan, we need to handle it differently
+                if last_intervention.Status == "Done":
+                    base_start = start_date
+                else:
+                    base_start = last_intv_date
+                
+                # Create base forecast using exponential from last rate
+                base_forecast = self._run_exponential_forecast(
+                    start_date=start_date,
+                    end_date=end_date,
+                    qi_oil=self.qi_oil,
+                    qi_liq=self.qi_liq,
+                    di_oil_eff=di_oil_eff,
+                    di_liq_eff=di_liq_eff
+                )
+                
+                # Save to InterventionForecast as base for next Plan
+                if first_plan:
+                    with rx.session() as session:
+                        self._save_to_intervention_forecast(
+                            session, first_plan, base_forecast, version=0
+                        )
+                    message_parts.append(f"Base saved for Plan intervention ({first_plan.TypeGTM})")
+                
+                # Create intervention forecast from first Plan date
+                if first_plan:
+                    first_plan_date = datetime.strptime(first_plan.PlanningDate[:10], "%Y-%m-%d")
+                    
+                    intervention_forecast = self._run_intervention_forecast(
+                        intervention=first_plan,
+                        start_date=first_plan_date,
+                        end_date=end_date
+                    )
+                    
+                    # Merge forecasts
+                    final_forecast_points = self._merge_forecasts(
+                        base_forecast=base_forecast,
+                        intervention_forecast=intervention_forecast,
+                        intervention_date=first_plan_date
+                    )
+                    message_parts.append(f"Merged at Plan date ({first_plan.PlanningDate})")
+                else:
+                    # Only Done interventions, use intervention forecast
+                    final_forecast_points = self._run_intervention_forecast(
+                        intervention=last_intervention,
+                        start_date=start_date,
+                        end_date=end_date,
+                        last_actual_oil=self.qi_oil,
+                        last_actual_liq=self.qi_liq
+                    )
+                    message_parts.append(f"Using last Done intervention ({last_intervention.TypeGTM})")
+            
+            if not final_forecast_points:
+                return rx.toast.error("Forecast failed - no data generated")
+            
+            # Save to ProductionForecast
             with rx.session() as session:
                 version = DCAService.get_next_version_fifo(
                     session, ProductionForecast, self.selected_id,
@@ -424,18 +793,11 @@ class ProductionState(SharedForecastState):
                 )
                 DCAService.save_forecast(
                     session, ProductionForecast, self.selected_id,
-                    result.forecast_points, version
+                    final_forecast_points, version
                 )
-                
-                # Save to InterventionForecast if intervention planned
-                if self.has_planned_intervention:
-                    DCAService.save_forecast(
-                        session, InterventionForecast, self.selected_id,
-                        result.forecast_points, version=0, data_type="Forecast"
-                    )
             
             # Update state
-            self.forecast_data = DCAService.forecast_to_dict_list(result.forecast_points)
+            self.forecast_data = DCAService.forecast_to_dict_list(final_forecast_points)
             self.current_forecast_version = version
             
             with rx.session() as session:
@@ -445,13 +807,11 @@ class ProductionState(SharedForecastState):
             
             self._update_chart_data()
             
-            msg = (
-                f"Forecast v{version}: {result.months} months, "
-                f"Di_eff={result.effective_di_oil:.4f}, Qoil={result.total_qoil:.0f}t"
-            )
-            if self.has_planned_intervention:
-                msg += " (+ InterventionForecast v0)"
+            # Calculate totals
+            total_qoil = sum(fp.q_oil for fp in final_forecast_points)
+            total_qliq = sum(fp.q_liq for fp in final_forecast_points)
             
+            msg = f"Forecast v{version}: {len(final_forecast_points)} months, Qoil={total_qoil:.0f}t. {'; '.join(message_parts)}"
             return rx.toast.success(msg)
             
         except Exception as e:
@@ -497,13 +857,15 @@ class ProductionState(SharedForecastState):
         """Delete the currently selected forecast version."""
         return self.delete_forecast_version(self.current_forecast_version)
 
+    # ========== Batch Forecast ==========
+
     def cancel_batch_forecast(self):
         """Cancel the running batch forecast."""
         self.batch_forecast_cancelled = True
         return rx.toast.warning("Batch forecast cancellation requested...")
 
     def run_forecast_all(self):
-        """Run DCA forecast for all completions with Dip/Dir."""
+        """Run DCA forecast for all completions with intervention-aware logic."""
         if not self.forecast_end_date:
             yield rx.toast.error("Please set forecast end date first")
             return
@@ -525,18 +887,29 @@ class ProductionState(SharedForecastState):
         try:
             end_date = datetime.strptime(self.forecast_end_date, "%Y-%m-%d")
             five_years_ago = datetime.now() - timedelta(days=5*365)
+            current_year = datetime.now().year
             
             self._load_k_month_data()
             
+            # Pre-load data
             with rx.session() as session:
                 history_by_completion = DatabaseService.bulk_load_history(
                     session, HistoryProd, cutoff_date=five_years_ago
                 )
                 
-                planned_interventions = session.exec(
-                    select(InterventionID.UniqueId).where(InterventionID.Status == "Plan")
+                # Load all interventions for current year
+                all_interventions = session.exec(
+                    select(InterventionID).where(
+                        InterventionID.InterventionYear == current_year
+                    )
                 ).all()
-                intervention_ids = set(planned_interventions)
+                
+                # Group by UniqueId
+                interventions_by_uid: Dict[str, List[InterventionID]] = {}
+                for intv in all_interventions:
+                    if intv.UniqueId not in interventions_by_uid:
+                        interventions_by_uid[intv.UniqueId] = []
+                    interventions_by_uid[intv.UniqueId].append(intv)
             
             success_count = 0
             error_count = 0
@@ -558,9 +931,6 @@ class ProductionState(SharedForecastState):
                     error_count += 1
                     continue
                 
-                sorted_history = sorted(history, key=lambda x: x["Date"])
-                last_prod = sorted_history[-1]
-                
                 di_oil = completion.Do if completion.Do and completion.Do > 0 else 0.0
                 
                 if di_oil <= 0:
@@ -568,40 +938,104 @@ class ProductionState(SharedForecastState):
                     error_count += 1
                     continue
                 
+                sorted_history = sorted(history, key=lambda x: x["Date"])
+                last_prod = sorted_history[-1]
+                
                 start_date = last_prod["Date"]
                 if isinstance(start_date, str):
                     start_date = datetime.strptime(start_date, "%Y-%m-%d")
                 
-                # Get Dip and Dir from completion
+                qi_oil = last_prod["OilRate"]
+                qi_liq = last_prod["LiqRate"]
+                
+                # Get adjustments
                 dip = completion.Dip if completion.Dip else 0.0
                 dir_val = completion.Dir if completion.Dir else 0.0
+                di_liq = completion.Dl if completion.Dl and completion.Dl > 0 else di_oil
                 
-                config = ForecastConfig(
-                    qi_oil=last_prod["OilRate"],
-                    di_oil=di_oil,
-                    b_oil=0.0,
-                    qi_liq=last_prod["LiqRate"],
-                    di_liq=completion.Dl if completion.Dl and completion.Dl > 0 else di_oil,
-                    b_liq=0.0,
-                    start_date=start_date,
-                    end_date=end_date,
-                    use_exponential=True,
-                    k_month_data=self.k_month_data,
-                    dip=dip,
-                    dir=dir_val
-                )
+                di_oil_eff = di_oil * (1 + dip) * (1 + dir_val)
+                di_liq_eff = di_liq * (1 + dip) * (1 + dir_val)
                 
-                result = DCAService.run_production_forecast(config)
-                
-                if not result.is_success:
-                    self.batch_forecast_errors.append(f"{unique_id}: {result.error}")
-                    error_count += 1
-                    continue
-                
-                total_qoil += result.total_qoil
-                total_qliq += result.total_qliq
+                # Get interventions for this completion
+                interventions = interventions_by_uid.get(unique_id, [])
+                done_interventions = [i for i in interventions if i.Status == "Done"]
+                plan_interventions = [i for i in interventions if i.Status == "Plan"]
                 
                 try:
+                    forecast_points = []
+                    forecast_type = ""
+                    
+                    # Apply same logic as single forecast
+                    if not interventions:
+                        # No intervention - standard exponential
+                        forecast_points = self._run_exponential_forecast(
+                            start_date, end_date, qi_oil, qi_liq, di_oil_eff, di_liq_eff
+                        )
+                        forecast_type = "Exponential"
+                    
+                    elif done_interventions and not plan_interventions:
+                        # Only Done - use last Done params
+                        last_done = done_interventions[-1]
+                        forecast_points = self._run_intervention_forecast(
+                            last_done, start_date, end_date, qi_oil, qi_liq
+                        )
+                        forecast_type = f"Done ({last_done.TypeGTM})"
+                    
+                    elif plan_interventions and not done_interventions:
+                        # Only Plan - base + merge
+                        first_plan = plan_interventions[0]
+                        plan_date = datetime.strptime(first_plan.PlanningDate[:10], "%Y-%m-%d")
+                        
+                        base_forecast = self._run_exponential_forecast(
+                            start_date, end_date, qi_oil, qi_liq, di_oil_eff, di_liq_eff
+                        )
+                        
+                        # Save base to InterventionForecast v0
+                        with rx.session() as session:
+                            self._save_to_intervention_forecast(session, first_plan, base_forecast, 0)
+                        
+                        intv_forecast = self._run_intervention_forecast(
+                            first_plan, plan_date, end_date
+                        )
+                        
+                        forecast_points = self._merge_forecasts(base_forecast, intv_forecast, plan_date)
+                        forecast_type = f"Plan ({first_plan.TypeGTM})"
+                    
+                    else:
+                        # Both Done and Plan
+                        first_plan = plan_interventions[0] if plan_interventions else None
+                        
+                        base_forecast = self._run_exponential_forecast(
+                            start_date, end_date, qi_oil, qi_liq, di_oil_eff, di_liq_eff
+                        )
+                        
+                        if first_plan:
+                            with rx.session() as session:
+                                self._save_to_intervention_forecast(session, first_plan, base_forecast, 0)
+                            
+                            plan_date = datetime.strptime(first_plan.PlanningDate[:10], "%Y-%m-%d")
+                            intv_forecast = self._run_intervention_forecast(first_plan, plan_date, end_date)
+                            forecast_points = self._merge_forecasts(base_forecast, intv_forecast, plan_date)
+                            forecast_type = f"Mixed ({len(done_interventions)}D+{len(plan_interventions)}P)"
+                        else:
+                            last_done = done_interventions[-1]
+                            forecast_points = self._run_intervention_forecast(
+                                last_done, start_date, end_date, qi_oil, qi_liq
+                            )
+                            forecast_type = f"Done ({last_done.TypeGTM})"
+                    
+                    if not forecast_points:
+                        self.batch_forecast_errors.append(f"{unique_id}: No forecast generated")
+                        error_count += 1
+                        continue
+                    
+                    # Calculate totals
+                    qoil = sum(fp.q_oil for fp in forecast_points)
+                    qliq = sum(fp.q_liq for fp in forecast_points)
+                    total_qoil += qoil
+                    total_qliq += qliq
+                    
+                    # Save to ProductionForecast
                     with rx.session() as session:
                         version = DCAService.get_next_version_fifo(
                             session, ProductionForecast, unique_id,
@@ -609,27 +1043,22 @@ class ProductionState(SharedForecastState):
                         )
                         DCAService.save_forecast(
                             session, ProductionForecast, unique_id,
-                            result.forecast_points, version
+                            forecast_points, version
                         )
-                        
-                        if unique_id in intervention_ids:
-                            DCAService.save_forecast(
-                                session, InterventionForecast, unique_id,
-                                result.forecast_points, version=0, data_type="Forecast"
-                            )
                     
                     success_count += 1
                     self.batch_forecast_results.append({
                         "UniqueId": unique_id,
                         "Version": version,
-                        "Months": result.months,
-                        "Qoil": round(result.total_qoil, 0),
-                        "Qliq": round(result.total_qliq, 0),
-                        "Di_eff": round(result.effective_di_oil, 4)
+                        "Months": len(forecast_points),
+                        "Qoil": round(qoil, 0),
+                        "Qliq": round(qliq, 0),
+                        "Type": forecast_type,
+                        "Di_eff": round(di_oil_eff, 4)
                     })
                     
                 except Exception as e:
-                    self.batch_forecast_errors.append(f"{unique_id}: Save error - {str(e)}")
+                    self.batch_forecast_errors.append(f"{unique_id}: {str(e)}")
                     error_count += 1
             
             self.is_batch_forecasting = False
@@ -637,7 +1066,7 @@ class ProductionState(SharedForecastState):
             
             if self.batch_forecast_cancelled:
                 yield rx.toast.warning(
-                    f"Batch forecast cancelled. Processed {success_count} of {len(self.completions)} completions."
+                    f"Batch cancelled. Processed {success_count}/{len(self.completions)}"
                 )
             else:
                 yield rx.toast.success(
@@ -663,13 +1092,11 @@ class ProductionState(SharedForecastState):
     
     @rx.var
     def unique_platforms(self) -> List[str]:
-        """Get unique platforms from WellID for batch Dip updates."""
         from ..models import PLATFORM_OPTIONS
         return PLATFORM_OPTIONS
     
     @rx.var
     def unique_fields(self) -> List[str]:
-        """Get unique fields for batch Dir updates."""
         return FIELD_OPTIONS
     
     @rx.var
@@ -686,12 +1113,10 @@ class ProductionState(SharedForecastState):
     
     @rx.var
     def effective_di_oil(self) -> float:
-        """Calculate effective oil decline rate."""
         return self.dio * (1 + self.dip) * (1 + self.dir)
     
     @rx.var
     def effective_di_display(self) -> str:
-        """Display effective decline rate."""
         return f"{self.effective_di_oil:.4f}"
     
     @rx.var
@@ -717,6 +1142,13 @@ class ProductionState(SharedForecastState):
         if self.selected_completion and self.selected_completion.Reservoir:
             return self.selected_completion.Reservoir
         return "-"
+    
+    @rx.var
+    def intervention_status_display(self) -> str:
+        """Display intervention status for selected completion."""
+        if not self.interventions_this_year:
+            return "No intervention this year"
+        return self.intervention_info
     
     @rx.var
     def batch_progress_percent(self) -> int:
