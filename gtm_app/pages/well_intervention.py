@@ -460,28 +460,32 @@ def forecast_section() -> rx.Component:
 
 
 def summary_section() -> rx.Component:
-    """Summary tables section showing Qoil forecast by month for current and next year."""
+    """Summary tables section with phase selector, year selector, and filters.
+    
+    Features:
+    - Phase toggle: Switch between Qoil (Oil) and Qliq (Liquid)
+    - Year selector: Choose any year from 2025-2050
+    - Search filters: Filter by Field, Platform, Reservoir, Type, Category
+    - TOTAL row recalculated based on filtered results
+    - Excel download for individual years or both years combined
+    """
     return rx.vstack(
         rx.hstack(
             rx.hstack(
                 rx.icon("table-2", size=20, color=rx.color("blue", 9)),
-                rx.heading("Intervention Qoil Forecast Summary", size="5"),
+                rx.heading("Intervention Forecast Summary", size="5"),
                 spacing="2",
                 align="center",
-            ),
-            rx.spacer(),
-            rx.button(
-                rx.icon("file-spreadsheet", size=16),
-                rx.text("Download All", size="2"),
-                on_click=GTMState.download_both_years_excel,
-                size="2",
-                variant="soft",
-                color_scheme="blue",
             ),
             width="100%",
             align="center",
         ),
         rx.divider(),
+        
+        # Control bar with phase, year, and filters
+        summary_controls_bar(),
+        
+        # Summary tables grid
         rx.grid(
             current_year_intervention_table(),
             next_year_intervention_table(),
