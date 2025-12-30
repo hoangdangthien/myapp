@@ -4,6 +4,7 @@ This service provides:
 - Common query patterns
 - Session management helpers
 - Data loading utilities
+- Bulk operations for batch processing
 """
 import reflex as rx
 from datetime import datetime, timedelta
@@ -189,6 +190,8 @@ class DatabaseService:
     ) -> Dict[str, List[Dict]]:
         """Bulk load history data for multiple unique IDs.
         
+        This is optimized for batch operations to minimize database queries.
+        
         Args:
             session: Database session
             model_class: The model class (e.g., HistoryProd)
@@ -196,10 +199,20 @@ class DatabaseService:
             cutoff_date: Optional cutoff date
             
         Returns:
-            Dictionary mapping unique_id to list of records
+            Dictionary mapping unique_id to list of records with keys:
+            - Date: datetime
+            - OilRate: float
+            - LiqRate: float
+            - WC: float (calculated)
         """
         from sqlmodel import desc
-        from ..utils.dca_utils import calculate_water_cut
+        
+        # Import water cut calculation
+        def calculate_water_cut(oil_rate: float, liq_rate: float) -> float:
+            if liq_rate <= 0:
+                return 0.0
+            wc = ((liq_rate - oil_rate) / liq_rate) * 100
+            return max(0.0, min(100.0, wc))
         
         query = select(model_class)
         
@@ -214,14 +227,15 @@ class DatabaseService:
         records = session.exec(query).all()
         
         # Group by UniqueId
-        result = {}
+        result: Dict[str, List[Dict]] = {}
         for rec in records:
             uid = rec.UniqueId
             if uid not in result:
                 result[uid] = []
             
-            oil_rate = rec.OilRate if rec.OilRate else 0.0
-            liq_rate = rec.LiqRate if rec.LiqRate else 0.0
+            # Handle None values - replace with 0
+            oil_rate = rec.OilRate if rec.OilRate is not None else 0.0
+            liq_rate = rec.LiqRate if rec.LiqRate is not None else 0.0
             
             result[uid].append({
                 "Date": rec.Date,
@@ -229,5 +243,43 @@ class DatabaseService:
                 "LiqRate": liq_rate,
                 "WC": round(calculate_water_cut(oil_rate, liq_rate), 2)
             })
+        
+        return result
+    
+    @staticmethod
+    def bulk_load_forecasts_by_id(
+        session,
+        model_class: Type[T],
+        intervention_ids: List[int] = None
+    ) -> Dict[int, Dict[int, List]]:
+        """Bulk load forecast data grouped by intervention ID and version.
+        
+        Args:
+            session: Database session
+            model_class: The model class (e.g., InterventionForecast)
+            intervention_ids: Optional list of intervention IDs to filter
+            
+        Returns:
+            Nested dictionary: {intervention_id: {version: [records]}}
+        """
+        query = select(model_class)
+        
+        if intervention_ids:
+            query = query.where(model_class.ID.in_(intervention_ids))
+        
+        records = session.exec(query).all()
+        
+        # Group by ID and Version
+        result: Dict[int, Dict[int, List]] = {}
+        for rec in records:
+            intv_id = rec.ID
+            ver = rec.Version
+            
+            if intv_id not in result:
+                result[intv_id] = {}
+            if ver not in result[intv_id]:
+                result[intv_id][ver] = []
+            
+            result[intv_id][ver].append(rec)
         
         return result
