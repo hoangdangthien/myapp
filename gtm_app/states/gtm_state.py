@@ -81,6 +81,19 @@ class GTMState(SharedForecastState):
     next_year_summary: List[dict] = []
     current_year: int = datetime.now().year
     next_year: int = datetime.now().year + 1
+    
+    # ========== Summary Table Filters ==========
+    selected_summary_phase: str = "oil"  # "oil" or "liquid"
+    selected_summary_year: int = 2025
+    summary_search_field: str = ""
+    summary_search_platform: str = ""
+    summary_search_reservoir: str = ""
+    summary_search_type: str = ""
+    summary_search_category: str = ""
+    
+    # Raw data storage for filtering (internal use)
+    _current_year_summary_raw: List[dict] = []
+    _next_year_summary_raw: List[dict] = []
 
     # ========== Batch Forecast State ==========
     is_batch_forecasting: bool = False
@@ -847,26 +860,134 @@ class GTMState(SharedForecastState):
 
     # ========== Summary Tables ==========
 
-    def set_year(self, year: int) -> int:
-        """Set current year and return it."""
-        self.current_year = int(year)
-        return self.current_year
+    def set_summary_phase(self, phase: str):
+        """Set phase for summary tables (oil or liquid)."""
+        self.selected_summary_phase = phase.lower()
+        self.load_forecast_summary_tables()
 
-    def load_forecast_summary_tables(self):
-        """Load forecast summary data for current year and next year.
+    def set_summary_year(self, year: str):
+        """Set year for summary table filtering."""
+        try:
+            self.selected_summary_year = int(year)
+            self.current_year = self.selected_summary_year
+            self.next_year = self.selected_summary_year + 1
+            self.load_forecast_summary_tables()
+        except ValueError:
+            pass
+    
+    # --- Search Filter Methods ---
+
+    def set_summary_search_field(self, value: str):
+        """Filter summary by field."""
+        self.summary_search_field = value
+        self._apply_summary_filters()
+
+    def set_summary_search_platform(self, value: str):
+        """Filter summary by platform."""
+        self.summary_search_platform = value
+        self._apply_summary_filters()
+
+    def set_summary_search_reservoir(self, value: str):
+        """Filter summary by reservoir."""
+        self.summary_search_reservoir = value
+        self._apply_summary_filters()
+
+    def set_summary_search_type(self, value: str):
+        """Filter summary by type."""
+        self.summary_search_type = value
+        self._apply_summary_filters()
+
+    def set_summary_search_category(self, value: str):
+        """Filter summary by category."""
+        self.summary_search_category = value
+        self._apply_summary_filters()
+
+    def clear_summary_filters(self):
+        """Clear all summary table filters."""
+        self.summary_search_field = ""
+        self.summary_search_platform = ""
+        self.summary_search_reservoir = ""
+        self.summary_search_type = ""
+        self.summary_search_category = ""
+        self._apply_summary_filters()
+
+    # --- Internal Filter Methods ---
+
+    def _apply_summary_filters(self):
+        """Apply search filters to summary data without reloading from DB."""
+        self.current_year_summary = self._filter_summary_data(
+            self._current_year_summary_raw, self.current_year
+        )
+        self.next_year_summary = self._filter_summary_data(
+            self._next_year_summary_raw, self.next_year
+        )
+
+    def _filter_summary_data(self, data: list, year: int) -> list:
+        """Apply filters to summary data list."""
+        if not data:
+            return []
         
-        Logic:
-        1. For 2025: Select interventions where InterventionYear = 2025
-        - Get latest forecast version for each
-        - Sum Qoil by month for 2025 only
-        2. For 2026: Select interventions where InterventionYear = 2026
-        - Get latest forecast version for each
-        - Sum Qoil by month for 2026 only
-        3. Add total row summing each month
+        filtered = []
+        for row in data:
+            # Skip TOTAL row from filtering, always include at end
+            if row.get("UniqueId") == "TOTAL":
+                continue
+            
+            # Apply filters (case-insensitive partial match)
+            if self.summary_search_field:
+                if self.summary_search_field.lower() not in str(row.get("Field", "")).lower():
+                    continue
+            
+            if self.summary_search_platform:
+                if self.summary_search_platform.lower() not in str(row.get("Platform", "")).lower():
+                    continue
+            
+            if self.summary_search_reservoir:
+                if self.summary_search_reservoir.lower() not in str(row.get("Reservoir", "")).lower():
+                    continue
+            
+            if self.summary_search_type:
+                if self.summary_search_type.lower() not in str(row.get("Type", "")).lower():
+                    continue
+            
+            if self.summary_search_category:
+                if self.summary_search_category.lower() not in str(row.get("Category", "")).lower():
+                    continue
+            
+            filtered.append(row)
+        
+        # Recalculate TOTAL row based on filtered data
+        if filtered:
+            month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            total_row = {
+                "UniqueId": "TOTAL",
+                "Field": "-",
+                "Platform": "-",
+                "Reservoir": "-",
+                "Type": "-",
+                "Category": "-",
+                "Status": "-",
+                "Date": "-",
+                "GTMYear": year,
+            }
+            for m in month_names:
+                total_row[m] = round(sum(row.get(m, 0) for row in filtered), 1)
+            total_row["Total"] = round(sum(total_row.get(m, 0) for m in month_names), 1)
+            filtered.append(total_row)
+        
+        return filtered
+    def load_forecast_summary_tables(self):
+        """Load forecast summary data with phase selection and year filtering.
+        
+        Enhanced Features:
+        - Phase selection: Switch between Qoil (oil) and Qliq (liquid)
+        - Year selection: Filter by InterventionYear (2025-2050)
+        - Search filters: Filter by Field, Platform, Reservoir, Type, Category
         """
         try:
-            current_year = 2025
-            next_year = 2026
+            current_year = self.selected_summary_year
+            next_year = self.selected_summary_year + 1
             
             self.current_year = current_year
             self.next_year = next_year
@@ -874,16 +995,19 @@ class GTMState(SharedForecastState):
             month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
             
+            # Determine which Q field to use based on phase
+            q_field = "Qoil" if self.selected_summary_phase == "oil" else "Qliq"
+            
             with rx.session() as session:
-                # Get all interventions directly from database to ensure fresh data
+                # Get all interventions
                 all_interventions = session.exec(select(InterventionID)).all()
                 
-                # Filter interventions by InterventionYear
-                interventions_2025 = [g for g in all_interventions if g.InterventionYear == current_year]
-                interventions_2026 = [g for g in all_interventions if g.InterventionYear == next_year]
-            
-                # Create lookup dictionaries keyed by ID (not UniqueId)
-                intervention_dict_2025 = {
+                # Filter by InterventionYear
+                interventions_current = [g for g in all_interventions if g.InterventionYear == current_year]
+                interventions_next = [g for g in all_interventions if g.InterventionYear == next_year]
+                
+                # Create lookup dictionaries keyed by ID
+                intervention_dict_current = {
                     gtm.ID: {
                         "UniqueId": gtm.UniqueId,
                         "Field": gtm.Field,
@@ -895,10 +1019,10 @@ class GTMState(SharedForecastState):
                         "Date": gtm.PlanningDate,
                         "GTMYear": gtm.InterventionYear
                     }
-                    for gtm in interventions_2025
+                    for gtm in interventions_current
                 }
                 
-                intervention_dict_2026 = {
+                intervention_dict_next = {
                     gtm.ID: {
                         "UniqueId": gtm.UniqueId,
                         "Field": gtm.Field,
@@ -910,7 +1034,7 @@ class GTMState(SharedForecastState):
                         "Date": gtm.PlanningDate,
                         "GTMYear": gtm.InterventionYear
                     }
-                    for gtm in interventions_2026
+                    for gtm in interventions_next
                 }
                 
                 # Get all forecast records with Version > 0
@@ -918,10 +1042,10 @@ class GTMState(SharedForecastState):
                     select(InterventionForecast).where(InterventionForecast.Version > 0)
                 ).all()
                 
-                # Group forecasts by ID (intervention ID) and Version
+                # Group forecasts by ID and Version
                 forecast_by_id: Dict[int, Dict[int, List]] = {}
                 for rec in forecast_records:
-                    intv_id = rec.ID  # Use ID, not UniqueId
+                    intv_id = rec.ID
                     ver = rec.Version
                     if intv_id not in forecast_by_id:
                         forecast_by_id[intv_id] = {}
@@ -929,11 +1053,11 @@ class GTMState(SharedForecastState):
                         forecast_by_id[intv_id][ver] = []
                     forecast_by_id[intv_id][ver].append(rec)
                 
-                # Process 2025 interventions
+                # Process current year interventions
                 current_year_data = []
                 current_year_totals = {m: 0.0 for m in range(1, 13)}
                 
-                for intv_id, details in intervention_dict_2025.items():
+                for intv_id, details in intervention_dict_current.items():
                     uid = details["UniqueId"]
                     
                     if intv_id not in forecast_by_id:
@@ -943,18 +1067,20 @@ class GTMState(SharedForecastState):
                     latest_version = max(versions.keys())
                     records = versions[latest_version]
                     
-                    # Monthly Qoil for current year only
-                    monthly_qoil = {m: 0.0 for m in range(1, 13)}
+                    # Monthly Q values for current year only
+                    monthly_q = {m: 0.0 for m in range(1, 13)}
                     
                     for rec in records:
                         rec_date = rec.Date if isinstance(rec.Date, datetime) else datetime.strptime(str(rec.Date), "%Y-%m-%d")
                         rec_year = rec_date.year
                         rec_month = rec_date.month
-                        qoil = round(rec.Qoil/1000,3) if rec.Qoil else 0.0
                         
-                        # Only sum Qoil for current_year (2025)
+                        # Use selected phase (Qoil or Qliq)
+                        q_value = getattr(rec, q_field, 0) if getattr(rec, q_field, None) else 0.0
+                        q_value = round(q_value / 1000, 3)  # Convert to thousands
+                        
                         if rec_year == current_year:
-                            monthly_qoil[rec_month] += qoil
+                            monthly_q[rec_month] += q_value
                     
                     # Build row
                     row = {
@@ -969,18 +1095,16 @@ class GTMState(SharedForecastState):
                         "GTMYear": details["GTMYear"],
                     }
                     
-                    total_qoil = 0.0
+                    total_q = 0.0
                     for i, name in enumerate(month_names, 1):
-                        row[name] = round(monthly_qoil[i], 1)
-                        current_year_totals[i] += monthly_qoil[i]
-                        total_qoil += monthly_qoil[i]
+                        row[name] = round(monthly_q[i], 1)
+                        current_year_totals[i] += monthly_q[i]
+                        total_q += monthly_q[i]
                     
-                    row["Total"] = total_qoil   # in thousands
-                    
-                    # Include row even if some months have 0 (intervention might start mid-year)
+                    row["Total"] = round(total_q, 1)
                     current_year_data.append(row)
                 
-                # Add total row for 2025
+                # Add total row for current year
                 if current_year_data:
                     total_row = {
                         "UniqueId": "TOTAL",
@@ -994,15 +1118,15 @@ class GTMState(SharedForecastState):
                         "GTMYear": current_year,
                     }
                     for i, name in enumerate(month_names, 1):
-                        total_row[name] = current_year_totals[i]
-                    total_row["Total"] = sum(current_year_totals.values()) 
+                        total_row[name] = round(current_year_totals[i], 1)
+                    total_row["Total"] = round(sum(current_year_totals.values()), 1)
                     current_year_data.append(total_row)
                 
-                # Process 2026 interventions
+                # Process next year interventions
                 next_year_data = []
                 next_year_totals = {m: 0.0 for m in range(1, 13)}
                 
-                for intv_id, details in intervention_dict_2026.items():
+                for intv_id, details in intervention_dict_next.items():
                     uid = details["UniqueId"]
                     
                     if intv_id not in forecast_by_id:
@@ -1012,18 +1136,20 @@ class GTMState(SharedForecastState):
                     latest_version = max(versions.keys())
                     records = versions[latest_version]
                     
-                    # Monthly Qoil for next year only
-                    monthly_qoil = {m: 0.0 for m in range(1, 13)}
+                    # Monthly Q values for next year only
+                    monthly_q = {m: 0.0 for m in range(1, 13)}
                     
                     for rec in records:
                         rec_date = rec.Date if isinstance(rec.Date, datetime) else datetime.strptime(str(rec.Date), "%Y-%m-%d")
                         rec_year = rec_date.year
                         rec_month = rec_date.month
-                        qoil = round(rec.Qoil/1000,3) if rec.Qoil else 0.0
                         
-                        # Only sum Qoil for next_year (2026)
+                        # Use selected phase (Qoil or Qliq)
+                        q_value = getattr(rec, q_field, 0) if getattr(rec, q_field, None) else 0.0
+                        q_value = round(q_value / 1000, 3)
+                        
                         if rec_year == next_year:
-                            monthly_qoil[rec_month] += qoil
+                            monthly_q[rec_month] += q_value
                     
                     # Build row
                     row = {
@@ -1038,18 +1164,16 @@ class GTMState(SharedForecastState):
                         "GTMYear": details["GTMYear"],
                     }
                     
-                    total_qoil = 0.0
+                    total_q = 0.0
                     for i, name in enumerate(month_names, 1):
-                        row[name] = round(monthly_qoil[i], 1)
-                        next_year_totals[i] += monthly_qoil[i]
-                        total_qoil += monthly_qoil[i]
+                        row[name] = round(monthly_q[i], 1)
+                        next_year_totals[i] += monthly_q[i]
+                        total_q += monthly_q[i]
                     
-                    row["Total"] = total_qoil / 1000
-                    
-                    # Include row even if some months have 0
+                    row["Total"] = round(total_q, 1)
                     next_year_data.append(row)
                 
-                # Add total row for 2026
+                # Add total row for next year
                 if next_year_data:
                     total_row = {
                         "UniqueId": "TOTAL",
@@ -1063,19 +1187,22 @@ class GTMState(SharedForecastState):
                         "GTMYear": next_year,
                     }
                     for i, name in enumerate(month_names, 1):
-                        total_row[name] =next_year_totals[i]
-                    total_row["Total"] = sum(next_year_totals.values()) 
+                        total_row[name] = round(next_year_totals[i], 1)
+                    total_row["Total"] = round(sum(next_year_totals.values()), 1)
                     next_year_data.append(total_row)
                 
-                # Sort by UniqueId (TOTAL will be at end due to alphabetical sorting)
-                self.current_year_summary = sorted(
-                    current_year_data, 
+                # Store raw data for filtering (before applying filters)
+                self._current_year_summary_raw = sorted(
+                    current_year_data,
                     key=lambda x: (x["UniqueId"] == "TOTAL", x["UniqueId"])
                 )
-                self.next_year_summary = sorted(
-                    next_year_data, 
+                self._next_year_summary_raw = sorted(
+                    next_year_data,
                     key=lambda x: (x["UniqueId"] == "TOTAL", x["UniqueId"])
                 )
+                
+                # Apply current filters
+                self._apply_summary_filters()
                 
         except Exception as e:
             print(f"Error loading forecast summary: {e}")
@@ -1393,12 +1520,13 @@ class GTMState(SharedForecastState):
     
     @rx.var
     def current_year_total_qoil(self) -> float:
-        # Exclude TOTAL row from sum
+        """Total Q (oil or liquid based on phase) for current year."""
+        # This uses filtered data, TOTAL row is recalculated in filter
         return sum(row.get("Total", 0) for row in self.current_year_summary if row.get("UniqueId") != "TOTAL")
-    
+
     @rx.var
     def next_year_total_qoil(self) -> float:
-        # Exclude TOTAL row from sum
+        """Total Q (oil or liquid based on phase) for next year."""
         return sum(row.get("Total", 0) for row in self.next_year_summary if row.get("UniqueId") != "TOTAL")
     
     @rx.var
@@ -1450,3 +1578,44 @@ class GTMState(SharedForecastState):
     @rx.var
     def batch_errors_display(self) -> List[str]:
         return self.batch_forecast_errors[:10]
+    
+    @rx.var
+    def phase_display_summary(self) -> str:
+        """Display current phase label for summary tables."""
+        return "Qoil" if self.selected_summary_phase == "oil" else "Qliq"
+
+    @rx.var
+    def is_oil_phase_summary(self) -> bool:
+        """Check if oil phase is selected for summary."""
+        return self.selected_summary_phase == "oil"
+
+    @rx.var
+    def year_options_str(self) -> List[str]:
+        """Year options as strings for select component (2025-2050)."""
+        return [str(y) for y in range(2025, 2051)]
+
+    @rx.var
+    def selected_year_str(self) -> str:
+        """Selected summary year as string for select component."""
+        return str(self.selected_summary_year)
+
+    @rx.var
+    def has_summary_filters(self) -> bool:
+        """Check if any summary filters are active."""
+        return bool(
+            self.summary_search_field or
+            self.summary_search_platform or
+            self.summary_search_reservoir or
+            self.summary_search_type or
+            self.summary_search_category
+        )
+
+    @rx.var
+    def current_year_filtered_count(self) -> int:
+        """Count of filtered records for current year (excluding TOTAL)."""
+        return len([r for r in self.current_year_summary if r.get("UniqueId") != "TOTAL"])
+
+    @rx.var
+    def next_year_filtered_count(self) -> int:
+        """Count of filtered records for next year (excluding TOTAL)."""
+        return len([r for r in self.next_year_summary if r.get("UniqueId") != "TOTAL"])
