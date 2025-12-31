@@ -1,6 +1,9 @@
-"""Production monitoring page with CompletionID data and DCA forecasting.
+"""Production monitoring page with CompletionID data, DCA forecasting, and Summary Tables.
 
-Updated to include Dip/Dir columns and filter by reservoir.
+Updated to include:
+- Dip/Dir columns and filter by reservoir
+- Summary tables for Rate and Q by year with phase selection
+- Download functionality for each table
 """
 import reflex as rx
 from ..templates.template import template
@@ -17,7 +20,11 @@ from ..components.production_tables import (
     forecast_result_table,
     production_rate_chart,
 )
-from ..components.tables import *
+from ..components.production_summary_tables import (
+    production_summary_section,
+    phase_selector,
+)
+from ..components.tables import production_table
 
 
 def completion_table_section() -> rx.Component:
@@ -73,18 +80,17 @@ def forecast_section() -> rx.Component:
                 # Forecast Results
                 rx.vstack(
                     rx.hstack(
-                    forecast_version_selector(),
-                    rx.cond(
-                        ProductionState.current_forecast_version > 0,
-                        rx.button(
-                            rx.icon("trash-2", size=14),
-                            rx.text("Delete version", size="1"),
-                            color_scheme="red",
-                            size="1",
-                            on_click=ProductionState.delete_current_forecast_version,
-                            
+                        forecast_version_selector(),
+                        rx.cond(
+                            ProductionState.current_forecast_version > 0,
+                            rx.button(
+                                rx.icon("trash-2", size=14),
+                                rx.text("Delete version", size="1"),
+                                color_scheme="red",
+                                size="1",
+                                on_click=ProductionState.delete_current_forecast_version,
                             ),
-                        rx.fragment(),
+                            rx.fragment(),
                         ),
                         align="center"
                     ),
@@ -105,7 +111,6 @@ def forecast_section() -> rx.Component:
     )
 
 
-
 @template(
     route="/",
     title="Production | Production Dashboard",
@@ -113,7 +118,7 @@ def forecast_section() -> rx.Component:
     on_load=ProductionState.load_completions,
 )
 def production_page() -> rx.Component:
-    """Production monitoring page with CompletionID data and DCA forecasting.
+    """Production monitoring page with CompletionID data, DCA forecasting, and Summary Tables.
     
     Features:
     - Display CompletionID table with well completion information
@@ -129,6 +134,12 @@ def production_page() -> rx.Component:
     - Batch update Dip for all completions on a platform
     - Batch update Dir for all completions in a reservoir+field
     
+    Summary Tables:
+    - Rate Summary: Average OilRate/LiqRate by month for current and next year
+    - Q Summary: Sum of Qoil/Qliq by month for current and next year
+    - Phase selection (Oil/Liquid) toggle
+    - Download button for each table (Excel format)
+    
     DCA Formula: q(t) = qi * exp(-Di_eff * 12/365 * t)
     Effective Decline: Di_eff = Do * (1 + Dip) * (1 + Dir)
     """
@@ -142,7 +153,7 @@ def production_page() -> rx.Component:
             ),
             rx.spacer(),
             rx.hstack(
-                rx.badge(f"Total Completions: {ProductionState.total_completions}", color_scheme="blue",size="2"),
+                rx.badge(f"Total Completions: {ProductionState.total_completions}", color_scheme="blue", size="2"),
                 rx.button(
                     rx.icon("refresh-cw", size=14),
                     rx.text("Reload", size="2"),
@@ -156,6 +167,7 @@ def production_page() -> rx.Component:
             align="center",
         ),
         rx.divider(),
+        
         # Main content: Two columns
         rx.grid(
             # Left: CompletionID Table
@@ -169,6 +181,10 @@ def production_page() -> rx.Component:
         
         # Production Rate Chart (full width)
         production_rate_chart(),
+        
+        # Summary Tables Section
+        #production_summary_section(),
+        
         align="start",
         spacing="4",
         width="100%",

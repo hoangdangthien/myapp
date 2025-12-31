@@ -122,6 +122,8 @@ def detailed_section() -> rx.Component:
 
 
 
+
+
 @template(
     route="/block-summary",
     title="Block 09-1 Summary | Production Dashboard",
