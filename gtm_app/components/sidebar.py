@@ -63,7 +63,11 @@ def sidebar() -> rx.Component:
                     "wrench",
                     "/well-intervention",
                 ),
-                
+                sidebar_item(
+                    "Block 09-1 Summary",
+                    "building-2",
+                    "/block-summary",
+                ),
                 width="100%",
                 spacing="1",
                 padding="0.5em",
