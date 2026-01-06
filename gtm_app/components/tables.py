@@ -240,7 +240,37 @@ def summary_search_filters() -> rx.Component:
         spacing="2",
         align="center",
     )
+def phase_selector(value,on_change) -> rx.Component:
+    """Phase selector for switching between Oil and Liquid."""
+    return rx.hstack(
+        rx.text("Phase:", size="2", weight="bold"),
+        rx.select(
+            ["oil","liquid"],
+            value=value,
+            on_change=on_change,
+            size="1",
+        ),
+        spacing="2",
+        align="center",
+    )
 
+
+def year_selector(value,on_change) -> rx.Component:
+    """Year selector dropdown (2025-2050)."""
+    return rx.hstack(
+        rx.text("Year:", size="2", weight="bold"),
+        rx.select(
+            [str(year) for year in range(2020,2051)],
+            value=value,
+            on_change=on_change,
+            size="1",
+            width="100px",
+            position="popper",
+            height="10rem",
+        ),
+        spacing="2",
+        align="center",
+    )
 
 def summary_controls_bar() -> rx.Component:
     """Combined control bar with phase, year, and unified search."""
