@@ -23,12 +23,7 @@ import io
 from sqlmodel import select, delete, func, or_
 import plotly.graph_objects as go
 
-from ..models import (
-    InterventionID,
-    InterventionForecast,
-    HistoryProd,
-    MAX_FORECAST_VERSIONS
-)
+from ..models import *
 from ..services.dca_service import DCAService, ForecastConfig, ForecastResult
 from ..services.database_service import DatabaseService
 from .shared_state import SharedForecastState
@@ -1260,7 +1255,29 @@ class GTMState(SharedForecastState):
             return rx.toast.error(f"Failed to download Excel: {str(e)}")
 
     # ========== CRUD Operations ==========
-
+    def _preprocess_(self,uniqueid):
+        Field=None
+        id_plt,rescode = uniqueid.split(":")
+        if id_plt in RONG_COND:
+            Field = "RONG_COND"
+        plt = id_plt.split("/")[1]
+        if plt in BACHHO_PLATFORMS:
+            Field="BACHHO"
+        elif plt in RONG_PLATFORMS:
+            Field="RONG"
+        elif plt in NRDM_PLATFORMS:
+            Field="NR-DOIMOI"
+        elif plt in GAUTRANG_PLATFORMS:
+            Field="GAUTRANG"
+        elif plt in THOTRANG_PLATFORMS:
+            Field="THOTTRANG"
+        elif plt in KINHNGU_PLATFORMS:
+            Field="KINHNGU"
+        elif plt in CATAM_PLATFORMS:
+            Field ="CATAM"
+        Reservoir = CODE2RES[rescode]
+        Platform = plt
+        return Platform,Field,Reservoir
     def add_intervention(self, form_data: dict):
         """Add new GTM to database with validation."""
         try:
@@ -1281,6 +1298,8 @@ class GTMState(SharedForecastState):
             form_data.setdefault("Category", "")
             form_data.setdefault("Describe", "")
             form_data["InterventionYear"] = datetime.strptime(form_data["PlanningDate"], "%Y-%m-%d").year
+            uniqueid = form_data.get("UniqueId")
+            form_data["Platform"],form_data["Field"],form_data["Reservoir"] = self._preprocess_(uniqueid)
             
             with rx.session() as session:
                 new_gtm = InterventionID(**form_data)
@@ -1305,7 +1324,7 @@ class GTMState(SharedForecastState):
             df = pd.read_excel(io.BytesIO(upload_data))
             
             required_cols = [
-                'UniqueId', 'Field', 'Platform', 'Reservoir', 'TypeGTM',
+                'UniqueId', 'TypeGTM',
                 'PlanningDate', 'InterventionYear', 'Status', 'InitialORate', 'bo', 'Dio',
                 'InitialLRate', 'bl', 'Dil'
             ]
@@ -1330,11 +1349,13 @@ class GTMState(SharedForecastState):
             
             with rx.session() as session:
                 for _, row in df.iterrows():
+                    uniqueid = row["UniqueId"]
+                    platform,field,reservoir = self._preprocess_(uniqueid)
                     new_gtm = InterventionID(
                         UniqueId=str(row['UniqueId']),
-                        Field=str(row['Field']),
-                        Platform=str(row['Platform']),
-                        Reservoir=str(row['Reservoir']),
+                        Field=str(field),
+                        Platform=str(platform),
+                        Reservoir=str(reservoir),
                         TypeGTM=str(row['TypeGTM']),
                         Category=str(row.get('Category', '')),
                         PlanningDate=str(row['PlanningDate'])[:10],
