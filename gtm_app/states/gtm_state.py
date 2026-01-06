@@ -56,6 +56,9 @@ class GTMState(SharedForecastState):
     # List of all interventions
     interventions: List[InterventionID] = []
     _all_interventions: List[InterventionID] = []
+
+    load_year: int = 2025
+    load_year_str = str(load_year)
     
     # Currently selected intervention
     current_intervention: Optional[InterventionID] = None
@@ -167,14 +170,21 @@ class GTMState(SharedForecastState):
         return True, ""
 
     # ========== Load Methods ==========
+    @rx.event
+    def set_load_year(self,year):
+        self.load_year_str = year
+        self.load_year = int(year)
+        self.load_interventions()
+    
     
     def load_interventions(self):
         """Load all GTMs from database."""
+        year = self.load_year
         try:
             self._load_k_month_data()
             
             with rx.session() as session:
-                self._all_interventions = session.exec(select(InterventionID)).all()
+                self._all_interventions = session.exec(select(InterventionID).where(InterventionID.InterventionYear==year)).all()
             
             self._apply_filters()
             if self.available_ids:
