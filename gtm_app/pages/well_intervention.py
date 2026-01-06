@@ -16,6 +16,7 @@ def intervention_table_section() -> rx.Component:
                 rx.heading("Intervention ID", size="4"),
                 rx.spacer(),
                 rx.hstack(
+                    year_selector(GTMState.load_year_str,GTMState.set_load_year),
                     search_interventions(),
                     add_intervention_button(),
                     load_intervention_button(),
@@ -483,7 +484,33 @@ def summary_section() -> rx.Component:
         rx.divider(),
         
         # Control bar with phase, year, and filters
-        summary_controls_bar(),
+        rx.card(
+        rx.vstack(
+            rx.hstack(
+                phase_selector(GTMState.selected_summary_phase,GTMState.set_summary_phase),
+                rx.divider(orientation="vertical", size="2"),
+                year_selector(GTMState.selected_year_str,GTMState.set_summary_year),
+                rx.divider(orientation="vertical", size="2"),
+                summary_search_filters(),
+                rx.spacer(),
+                rx.button(
+                    rx.icon("file-spreadsheet", size=16),
+                    rx.text("Download All", size="2"),
+                    on_click=GTMState.download_both_years_excel,
+                    size="1",
+                    variant="soft",
+                    color_scheme="blue",
+                ),
+                width="100%",
+                align="center",
+                wrap="wrap",
+            ),
+            width="100%",
+            spacing="2",
+        ),
+        padding="0.75em",
+        width="100%",
+    ),
         
         # Summary tables grid
         rx.grid(
