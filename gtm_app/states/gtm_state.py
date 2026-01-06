@@ -99,6 +99,9 @@ class GTMState(SharedForecastState):
     batch_forecast_cancelled: bool = False
 
     # ========== Helper Methods ==========
+    intervention_page_size: int = 20
+    intervention_offset: int = 0
+    intervention_total_count: int = 0
     
     def _parse_selected_id(self) -> Tuple[int, str]:
         """Parse selected_id string to get ID and UniqueId.
@@ -173,27 +176,30 @@ class GTMState(SharedForecastState):
     
     
     def load_interventions(self):
-        """Load all GTMs from database."""
-        year = self.load_year
+        '''Load all interventions from database for the selected year.'''
         try:
-            self._load_k_month_data()
-            
             with rx.session() as session:
-                self._all_interventions = session.exec(select(InterventionID).where(InterventionID.InterventionYear==year)).all()
+                self._all_interventions = session.exec(
+                    select(InterventionID).where(
+                        InterventionID.InterventionYear == self.load_year
+                    )
+                ).all()
             
             self._apply_filters()
-            if self.available_ids:
+            
+            # Initialize pagination
+            self.intervention_total_count = len(self.interventions)
+            self.intervention_offset = 0
+            
+            if self.available_ids and not self.selected_id:
                 self.selected_id = self.available_ids[0]
-                self.load_production_data()
-            
-            self.load_forecast_summary_tables()
-            
+                
         except Exception as e:
-            print(f"Error loading GTMs: {e}")
+            print(f"Error loading interventions: {e}")
             self.interventions = []
 
     def _apply_filters(self):
-        """Apply search and filters to interventions list."""
+        '''Apply filters to interventions list.'''
         filtered = self._all_interventions
         if self.search_value:
             search_lower = self.search_value.lower()
@@ -208,6 +214,43 @@ class GTMState(SharedForecastState):
         self.interventions = filtered
         # Format: "ID_UniqueId"
         self.available_ids = [f"{i.ID}_{i.UniqueId}" for i in self.interventions]
+        
+        # Update pagination
+        self.intervention_total_count = len(self.interventions)
+        # Reset to first page when filters change
+        self.intervention_offset = 0
+
+    def set_intervention_page_size(self, size: str):
+        '''Set page size and reset to first page.'''
+        try:
+            self.intervention_page_size = int(size)
+            self.intervention_offset = 0  # Reset to first page
+        except ValueError:
+            pass
+    
+    def intervention_prev_page(self, action: str = "prev"):
+        '''Navigate to previous page or first page.'''
+        if action == "first":
+            self.intervention_offset = 0
+        elif self.intervention_offset >= self.intervention_page_size:
+            self.intervention_offset -= self.intervention_page_size
+        else:
+            self.intervention_offset = 0
+    
+    def intervention_next_page(self, action: str = "next"):
+        '''Navigate to next page or last page.'''
+        import math
+        max_offset = (self.intervention_total_pages - 1) * self.intervention_page_size
+        
+        if action == "last":
+            self.intervention_offset = max(0, max_offset)
+        elif self.intervention_offset + self.intervention_page_size < self.intervention_total_count:
+            self.intervention_offset += self.intervention_page_size
+    
+    def intervention_go_to_page(self, page: int):
+        '''Navigate to specific page (1-indexed).'''
+        if 1 <= page <= self.intervention_total_pages:
+            self.intervention_offset = (page - 1) * self.intervention_page_size
 
     def filter_interventions(self, search_values: str):
         """Filter interventions by search term."""
@@ -1614,3 +1657,37 @@ class GTMState(SharedForecastState):
     def next_year_filtered_count(self) -> int:
         """Count of filtered records for next year (excluding TOTAL)."""
         return len([r for r in self.next_year_summary if r.get("UniqueId") != "TOTAL"])
+    @rx.var
+    def intervention_total_pages(self) -> int:
+        '''Calculate total pages for intervention table.'''
+        if self.intervention_total_count == 0 or self.intervention_page_size == 0:
+            return 1
+        import math
+        return math.ceil(self.intervention_total_count / self.intervention_page_size)
+    
+    @rx.var
+    def intervention_current_page(self) -> int:
+        '''Calculate current page (1-indexed).'''
+        if self.intervention_page_size == 0:
+            return 1
+        return (self.intervention_offset // self.intervention_page_size) + 1
+    
+    @rx.var
+    def intervention_start_item(self) -> int:
+        '''First item index on current page (1-indexed for display).'''
+        if self.intervention_total_count == 0:
+            return 0
+        return self.intervention_offset + 1
+    
+    @rx.var
+    def intervention_end_item(self) -> int:
+        '''Last item index on current page (1-indexed for display).'''
+        end = self.intervention_offset + self.intervention_page_size
+        return min(end, self.intervention_total_count)
+    
+    @rx.var
+    def paginated_interventions(self) -> List[InterventionID]:
+        '''Get interventions for current page after filtering.'''
+        start = self.intervention_offset
+        end = start + self.intervention_page_size
+        return self.interventions[start:end]
