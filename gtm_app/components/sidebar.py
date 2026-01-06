@@ -66,7 +66,7 @@ def sidebar() -> rx.Component:
                 sidebar_item(
                     "Block 09-1 Summary",
                     "building-2",
-                    "/block-summary",
+                    "/summary",
                 ),
                 width="100%",
                 spacing="1",

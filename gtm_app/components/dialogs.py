@@ -748,7 +748,7 @@ def update_intervention_dialog(Intv: InterventionID) -> rx.Component:
                             default_value=Intv.InitialORate.to(str),
                             min_value=0,
                             max_value=10000,
-                            step="0.1",
+                            step="0.01",
                             helper_text="t/day",
                         ),
                         validated_number_field(
@@ -757,7 +757,7 @@ def update_intervention_dialog(Intv: InterventionID) -> rx.Component:
                             default_value=Intv.bo.to(str),
                             min_value=0,
                             max_value=2,
-                            step="0.01",
+                            step="0.0001",
                             helper_text="0-2",
                         ),
                         validated_number_field(
@@ -766,7 +766,7 @@ def update_intervention_dialog(Intv: InterventionID) -> rx.Component:
                             default_value=Intv.Dio.to(str),
                             min_value=0,
                             max_value=1,
-                            step="0.0001",
+                            step="0.0000000001",
                             helper_text="1/month",
                         ),
                         columns="3",
@@ -787,7 +787,7 @@ def update_intervention_dialog(Intv: InterventionID) -> rx.Component:
                             default_value=Intv.InitialLRate.to(str),
                             min_value=0,
                             max_value=20000,
-                            step="0.1",
+                            step="0.01",
                             helper_text="t/day",
                         ),
                         validated_number_field(
@@ -796,7 +796,7 @@ def update_intervention_dialog(Intv: InterventionID) -> rx.Component:
                             default_value=Intv.bl.to(str),
                             min_value=0,
                             max_value=2,
-                            step="0.01",
+                            step="0.0001",
                             helper_text="0-2",
                         ),
                         validated_number_field(
@@ -805,7 +805,7 @@ def update_intervention_dialog(Intv: InterventionID) -> rx.Component:
                             default_value=Intv.Dil.to(str),
                             min_value=0,
                             max_value=1,
-                            step="0.0001",
+                            step="0.0000000001",
                             helper_text="1/month",
                         ),
                         columns="3",

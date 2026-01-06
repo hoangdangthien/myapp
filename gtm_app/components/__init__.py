@@ -34,39 +34,15 @@ try:
 except ImportError:
     pass
 
+from .dialogs import *
+from .charts import *
+from .statistics import *
 try:
-    from .gtm_dialogs import (
-        add_gtm_button, 
-        update_gtm_dialog, 
-        delete_gtm_dialog, 
-        load_excel_button, 
-        search_gtm
-    )
-except ImportError:
-    pass
-
-try:
-    from .gtm_table import (
-        gtm_table, 
-        show_intervention, 
-        production_record_table, 
-        forecast_result_table, 
-        history_stats_card
-    )
-except ImportError:
-    pass
-
-try:
-    from .gtm_charts import gtm_type_chart, stats_cards, production_rate_chart
-except ImportError:
-    pass
-
-try:
-    from .summary_tables import (
-        current_year_summary_table,
-        next_year_summary_table,
-        summary_section,
-        download_all_button,
+    from .block_summary_components import (
+        block_summary_controls,
+        current_year_summary_table as block_current_year_table,
+        next_year_summary_table as block_next_year_table,
+        detailed_summary_table,
     )
 except ImportError:
     pass
